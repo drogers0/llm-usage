@@ -94,6 +94,26 @@ extension_fetch() {
   [ -f "$CACHE_DIR/claude_usage.json" ] && claude_mtime=$(stat -f %m "$CACHE_DIR/claude_usage.json")
   [ -f "$CACHE_DIR/codex_usage.json" ] && codex_mtime=$(stat -f %m "$CACHE_DIR/codex_usage.json")
 
+  # Start a local cache server and get its port
+  local server_pid server_port port_file
+  port_file=$(mktemp)
+  python3 "$ROOT_DIR/native-host/cache_server.py" > "$port_file" &
+  server_pid=$!
+  local pw=0
+  while [ "$pw" -lt 10 ]; do
+    sleep 0.2
+    server_port=$(head -1 "$port_file" 2>/dev/null)
+    [ -n "$server_port" ] && break
+    pw=$((pw + 1))
+  done
+  rm -f "$port_file"
+
+  if [ -z "$server_port" ]; then
+    echo "Failed to start cache server" >&2
+    kill $server_pid 2>/dev/null
+    return 1
+  fi
+
   # Open the extension's fetch page in a hidden window
   local front_app
   front_app=$(osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true' 2>/dev/null)
@@ -102,7 +122,7 @@ extension_fetch() {
     tell application \"Google Chrome\"
       set w to make new window
       set bounds of w to {0, 0, 1, 1}
-      set URL of active tab of w to \"chrome-extension://${EXTENSION_ID}/fetch.html?s=${services}\"
+      set URL of active tab of w to \"chrome-extension://${EXTENSION_ID}/fetch.html?s=${services}&port=${server_port}\"
     end tell
     tell application \"${front_app}\" to activate
   " 2>/dev/null
@@ -133,9 +153,10 @@ extension_fetch() {
       fi
     fi
 
-    $claude_ok && $codex_ok && return 0
+    $claude_ok && $codex_ok && { kill $server_pid 2>/dev/null; return 0; }
     elapsed=$((elapsed + 1))
   done
+  kill $server_pid 2>/dev/null
   echo "Timed out waiting for extension fetch." >&2
   return 1
 }

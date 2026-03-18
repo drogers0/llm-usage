@@ -2,11 +2,6 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
-HOST_SCRIPT="$ROOT_DIR/native-host/usage_cache_host.py"
-HOST_NAME="com.llm_usage.cache_host"
-
-# Chrome native messaging hosts directory (macOS)
-CHROME_NMH_DIR="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
 
 if [ $# -lt 1 ]; then
   echo "Usage: $0 <chrome-extension-id>"
@@ -21,26 +16,6 @@ if [ $# -lt 1 ]; then
 fi
 
 EXT_ID="$1"
-
-echo "Installing native messaging host..."
-
-chmod +x "$HOST_SCRIPT"
-
-mkdir -p "$CHROME_NMH_DIR"
-
-cat > "$CHROME_NMH_DIR/$HOST_NAME.json" <<EOF
-{
-  "name": "$HOST_NAME",
-  "description": "Writes cached usage data for llm_usage scripts",
-  "path": "$HOST_SCRIPT",
-  "type": "stdio",
-  "allowed_origins": [
-    "chrome-extension://$EXT_ID/"
-  ]
-}
-EOF
-
-echo "Installed: $CHROME_NMH_DIR/$HOST_NAME.json"
 
 # Save extension ID to .env so the bash scripts can trigger it
 ENV_FILE="$ROOT_DIR/.env"

@@ -6,13 +6,13 @@
   "permissions": [
     "cookies",
     "webNavigation",
-    "nativeMessaging",
     "scripting",
     "tabs"
   ],
   "host_permissions": [
     "https://claude.ai/*",
-    "https://chatgpt.com/*"
+    "https://chatgpt.com/*",
+    "http://127.0.0.1/*"
   ],
   "background": {
     "service_worker": "background.js"

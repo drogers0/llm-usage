@@ -4,5 +4,6 @@
 
 const params = new URLSearchParams(window.location.search);
 const services = params.get("s") || "claude,codex";
+const port = params.get("port") || "";
 
-chrome.runtime.sendMessage({ action: "fetch_usage", services: services.split(",") });
+chrome.runtime.sendMessage({ action: "fetch_usage", services: services.split(","), port });

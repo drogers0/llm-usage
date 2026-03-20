@@ -1,271 +1,239 @@
-const HOST_NAME = "com.llm_usage.cache_host";
+// src/shared/errors.ts
+var UsageError = class extends Error {
+  constructor(message, code) {
+    super(message);
+    this.code = code;
+    this.name = this.constructor.name;
+  }
+};
+var ParseError = class extends UsageError {
+  constructor(message) {
+    super(message, "parse_error");
+  }
+};
+var AuthError = class extends UsageError {
+  constructor(message) {
+    super(message, "auth_error");
+  }
+};
+var TransportError = class extends UsageError {
+  constructor(message) {
+    super(message, "transport_error");
+  }
+};
 
-function sendStatus(status) {
-  sendToHost({ type: "status", cache: { fetch_status: status } });
-}
+// src/extension/providers/base.ts
+var BaseExtensionProvider = class {
+  throwAuth(msg) {
+    throw new AuthError(msg);
+  }
+  throwParse(msg) {
+    throw new ParseError(msg);
+  }
+  throwTransport(msg) {
+    throw new TransportError(msg);
+  }
+};
 
-// Handle fetch requests from the trigger page
+// src/extension/providers/claude.ts
+var ClaudeExtensionProvider = class extends BaseExtensionProvider {
+  id = "claude";
+  async fetch(ctx) {
+    const cookies = await chrome.cookies.getAll({ domain: ".claude.ai" });
+    const orgCookie = cookies.find((c) => c.name === "lastActiveOrg");
+    if (!orgCookie) this.throwAuth("lastActiveOrg cookie not found \u2014 log in to claude.ai first");
+    const tab = await ctx.createHiddenTab("https://claude.ai/settings/usage", ctx.windowId);
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: async (orgId) => {
+          const resp = await fetch(`/api/organizations/${orgId}/usage`, {
+            credentials: "include"
+          });
+          if (!resp.ok) return { error: `HTTP ${resp.status}` };
+          return { data: await resp.json() };
+        },
+        args: [orgCookie.value]
+      });
+      const result = results?.[0]?.result;
+      if (!result || result.error) this.throwTransport(result?.error || "script returned no result");
+      ctx.sendToHost({ type: "claude", cache: { claude_usage: result.data } });
+      return { ok: true };
+    } finally {
+      chrome.tabs.remove(tab.id).catch(() => void 0);
+    }
+  }
+};
+
+// src/extension/providers/codex.ts
+var CodexExtensionProvider = class extends BaseExtensionProvider {
+  id = "codex";
+  async fetch(ctx) {
+    const tab = await ctx.createHiddenTab("https://chatgpt.com/codex/settings/usage", ctx.windowId);
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: async () => {
+          try {
+            const tokenResp = await fetch("/api/auth/session", { credentials: "include" });
+            if (!tokenResp.ok) return { error: `session HTTP ${tokenResp.status}` };
+            const session = await tokenResp.json();
+            if (!session.accessToken) return { error: "could not get access token" };
+            const usageResp = await fetch("/backend-api/wham/usage", {
+              credentials: "include",
+              headers: { authorization: `Bearer ${session.accessToken}` }
+            });
+            if (!usageResp.ok) return { error: `usage HTTP ${usageResp.status}` };
+            return { data: await usageResp.json() };
+          } catch (e) {
+            return { error: e.message };
+          }
+        }
+      });
+      const result = results?.[0]?.result;
+      if (!result || result.error) this.throwTransport(result?.error || "script returned no result");
+      ctx.sendToHost({ type: "codex", cache: { codex_usage: result.data } });
+      return { ok: true };
+    } finally {
+      chrome.tabs.remove(tab.id).catch(() => void 0);
+    }
+  }
+};
+
+// src/extension/providers/copilot.ts
+var CopilotExtensionProvider = class extends BaseExtensionProvider {
+  id = "copilot";
+  async fetch(ctx) {
+    const tab = await ctx.createHiddenTab("https://github.com/settings/copilot/features", ctx.windowId);
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: async () => {
+          const root = document.body;
+          if (!root) return { error: "missing document body" };
+          const text = root.innerText;
+          const percentEl = Array.from(document.querySelectorAll("*")).find((el) => /%/.test(el.textContent || "") && /used|usage|premium/i.test(el.textContent || ""));
+          let usedPercent = null;
+          let remainingPercent = null;
+          if (percentEl?.textContent) {
+            const m = percentEl.textContent.match(/([0-9]+(?:\.[0-9]+)?)\s*%/);
+            if (m) {
+              usedPercent = Number(m[1]);
+              if (Number.isFinite(usedPercent)) {
+                remainingPercent = Number((100 - usedPercent).toFixed(1));
+              }
+            }
+          }
+          if (usedPercent == null) {
+            const slash = text.match(/([0-9][0-9,]*)\s*\/\s*([0-9][0-9,]*)/);
+            if (slash) {
+              const used = Number(slash[1].replace(/,/g, ""));
+              const total = Number(slash[2].replace(/,/g, ""));
+              if (Number.isFinite(used) && Number.isFinite(total) && total > 0) {
+                usedPercent = Number((used / total * 100).toFixed(1));
+                remainingPercent = Number((100 - usedPercent).toFixed(1));
+              }
+            }
+          }
+          if (usedPercent == null || remainingPercent == null) {
+            return { error: "could not parse Copilot usage from DOM" };
+          }
+          return { data: { used_percent: usedPercent, remaining_percent: remainingPercent } };
+        }
+      });
+      const result = results?.[0]?.result;
+      if (!result || result.error) this.throwParse(result?.error || "script returned no result");
+      ctx.sendToHost({ type: "copilot", cache: { copilot_usage: result.data } });
+      return { ok: true };
+    } finally {
+      chrome.tabs.remove(tab.id).catch(() => void 0);
+    }
+  }
+};
+
+// src/extension/providers/registry.ts
+var extensionProviders = {
+  claude: new ClaudeExtensionProvider(),
+  codex: new CodexExtensionProvider(),
+  copilot: new CopilotExtensionProvider()
+};
+
+// src/extension/background.ts
+var HOST_NAME = "com.llm_usage.cache_host";
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.action !== "fetch_usage") return;
-  // Use the sender's window — it's already hidden by AppleScript
+  const message = msg;
+  if (message.action !== "fetch_usage") return;
   const windowId = sender.tab?.windowId;
-  handleFetchRequest(msg.services || ["claude", "codex", "copilot"], windowId)
-    .then((result) => sendResponse(result))
-    .catch((e) => sendResponse({ error: e.message }));
+  const services = Array.isArray(message.services) ? message.services : ["claude", "codex", "copilot"];
+  handleFetchRequest(services, windowId).then((result) => sendResponse(result)).catch((e) => sendResponse({ error: e.message }));
   return true;
 });
-
 async function handleFetchRequest(services, windowId) {
-  const startedAt = new Date().toISOString();
-  const results = {};
+  const startedAt = (/* @__PURE__ */ new Date()).toISOString();
   const errors = {};
-
-  if (services.includes("claude")) {
-    results.claude = await fetchClaude(windowId);
-    if (results.claude?.error) {
-      errors.claude = results.claude.error;
+  const results = {};
+  for (const service of services) {
+    const providerId = service;
+    const provider = extensionProviders[providerId];
+    if (!provider) {
+      errors[service] = `unknown provider: ${service}`;
+      continue;
+    }
+    try {
+      results[service] = await provider.fetch({ windowId, createHiddenTab, sendToHost });
+    } catch (err) {
+      if (err instanceof UsageError) {
+        errors[service] = `${err.code}: ${err.message}`;
+      } else {
+        errors[service] = err.message;
+      }
     }
   }
-  if (services.includes("codex")) {
-    results.codex = await fetchCodex(windowId);
-    if (results.codex?.error) {
-      errors.codex = results.codex.error;
-    }
-  }
-  if (services.includes("copilot")) {
-    results.copilot = await fetchCopilot(windowId);
-    if (results.copilot?.error) {
-      errors.copilot = results.copilot.error;
-    }
-  }
-
-  const failedServices = Object.keys(errors);
-  if (failedServices.length > 0) {
-    sendStatus({
-      ok: false,
-      at: new Date().toISOString(),
-      started_at: startedAt,
-      services,
-      errors,
-    });
-  } else {
-    sendStatus({
-      ok: true,
-      at: new Date().toISOString(),
-      started_at: startedAt,
-      services,
-    });
-  }
-
-  // Close the hidden window when done
+  const status = {
+    ok: Object.keys(errors).length === 0,
+    at: (/* @__PURE__ */ new Date()).toISOString(),
+    started_at: startedAt,
+    services,
+    ...Object.keys(errors).length > 0 ? { errors } : {}
+  };
+  sendToHost({ type: "status", cache: { fetch_status: status } });
   if (windowId) {
-    chrome.windows.remove(windowId).catch(() => {});
+    chrome.windows.remove(windowId).catch(() => void 0);
   }
-
   return results;
 }
-
-// Create a tab in the existing hidden window, fetch, then close the tab
 async function createHiddenTab(url, windowId) {
   const tab = await chrome.tabs.create({ url, windowId, active: false });
   try {
     await waitForTab(tab.id);
     return tab;
   } catch (e) {
-    chrome.tabs.remove(tab.id).catch(() => {});
+    chrome.tabs.remove(tab.id).catch(() => void 0);
     throw e;
   }
 }
-
-async function fetchClaude(windowId) {
-  const cookies = await chrome.cookies.getAll({ domain: ".claude.ai" });
-  const orgCookie = cookies.find((c) => c.name === "lastActiveOrg");
-  if (!orgCookie) {
-    return { error: "lastActiveOrg cookie not found — log in to claude.ai first" };
-  }
-  const orgId = orgCookie.value;
-
-  const tab = await createHiddenTab("https://claude.ai/settings/usage", windowId);
-
-  try {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: async (orgId) => {
-        const resp = await fetch(`/api/organizations/${orgId}/usage`, {
-          credentials: "include",
-        });
-        if (!resp.ok) return { error: `HTTP ${resp.status}` };
-        return { data: await resp.json() };
-      },
-      args: [orgId],
-    });
-
-    const result = results?.[0]?.result;
-    if (!result || result.error) {
-      return { error: result?.error || "script returned no result" };
-    }
-
-    sendToHost({ type: "claude", cache: { claude_usage: result.data } });
-    return { ok: true };
-  } finally {
-    chrome.tabs.remove(tab.id).catch(() => {});
-  }
-}
-
-async function fetchCodex(windowId) {
-  const tab = await createHiddenTab("https://chatgpt.com/codex/settings/usage", windowId);
-
-  try {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: async () => {
-        try {
-          const tokenResp = await fetch("/api/auth/session", {
-            credentials: "include",
-          });
-          if (tokenResp.ok) {
-            const session = await tokenResp.json();
-            const token = session.accessToken;
-            if (token) {
-              const resp = await fetch("/backend-api/wham/usage", {
-                credentials: "include",
-                headers: { authorization: `Bearer ${token}` },
-              });
-              if (resp.ok) return { data: await resp.json() };
-              return { error: `usage HTTP ${resp.status}` };
-            }
-          }
-          return { error: "could not get access token" };
-        } catch (e) {
-          return { error: e.message };
-        }
-      },
-      args: [],
-    });
-
-    const result = results?.[0]?.result;
-    if (!result || result.error) {
-      return { error: result?.error || "script returned no result" };
-    }
-
-    sendToHost({ type: "codex", cache: { codex_usage: result.data } });
-    return { ok: true };
-  } finally {
-    chrome.tabs.remove(tab.id).catch(() => {});
-  }
-}
-
-async function fetchCopilot(windowId) {
-  const tab = await createHiddenTab("https://github.com/settings/copilot/features", windowId);
-
-  try {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: async () => {
-        try {
-          const text = document.body?.innerText || "";
-          const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
-
-          const contextLines = lines
-            .filter((l) => /copilot|premium|request|usage|remaining|reset|renew/i.test(l))
-            .slice(0, 20);
-
-          const parseIntSafe = (s) => {
-            if (!s) return null;
-            const n = Number(String(s).replace(/,/g, ""));
-            return Number.isFinite(n) ? n : null;
-          };
-
-          let used = null;
-          let total = null;
-          let usedPercent = null;
-          let remainingPercent = null;
-
-          const usedTotalMatch = text.match(/([0-9][0-9,]*)\s*\/\s*([0-9][0-9,]*)/);
-          if (usedTotalMatch) {
-            used = parseIntSafe(usedTotalMatch[1]);
-            total = parseIntSafe(usedTotalMatch[2]);
-            if (total && total > 0) {
-              usedPercent = Number(((used / total) * 100).toFixed(1));
-              remainingPercent = Number((100 - usedPercent).toFixed(1));
-            }
-          }
-
-          if (usedPercent == null) {
-            const percentMatch = text.match(/([0-9]+(?:\.[0-9]+)?)\s*%\s*(?:used|of\s+limit)?/i);
-            if (percentMatch) {
-              usedPercent = Number(percentMatch[1]);
-              if (Number.isFinite(usedPercent)) {
-                remainingPercent = Number((100 - usedPercent).toFixed(1));
-              }
-            }
-          }
-
-          const resetMatch = text.match(/(?:resets?|renews?)\s+(?:on\s+)?([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})/i);
-          const resetText = resetMatch ? resetMatch[1] : null;
-
-          if (usedPercent == null && used == null && total == null) {
-            return {
-              error: "could not parse Copilot usage from GitHub page",
-              parse_context: contextLines,
-            };
-          }
-
-          return {
-            data: {
-              source: "github/settings/copilot/features",
-              fetched_at: new Date().toISOString(),
-              used,
-              total,
-              used_percent: usedPercent,
-              remaining_percent: remainingPercent,
-              reset_text: resetText,
-              parse_context: contextLines,
-            },
-          };
-        } catch (e) {
-          return { error: e.message };
-        }
-      },
-      args: [],
-    });
-
-    const result = results?.[0]?.result;
-    if (!result || result.error) {
-      return { error: result?.error || "script returned no result" };
-    }
-
-    sendToHost({ type: "copilot", cache: { copilot_usage: result.data } });
-    return { ok: true };
-  } finally {
-    chrome.tabs.remove(tab.id).catch(() => {});
-  }
-}
-
 function waitForTab(tabId) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       chrome.webNavigation.onCompleted.removeListener(listener);
       reject(new Error("tab load timed out"));
-    }, 30000);
-
+    }, 3e4);
     function listener(details) {
       if (details.tabId === tabId && details.frameId === 0) {
         clearTimeout(timeout);
         chrome.webNavigation.onCompleted.removeListener(listener);
-        setTimeout(resolve, 1000);
+        setTimeout(resolve, 1e3);
       }
     }
     chrome.webNavigation.onCompleted.addListener(listener);
   });
 }
-
 function sendToHost(payload) {
   chrome.runtime.sendNativeMessage(HOST_NAME, payload, (response) => {
     if (chrome.runtime.lastError) {
       console.error("LLM Usage:", chrome.runtime.lastError.message);
     } else {
-      console.log("LLM Usage:", payload.type, response);
+      console.log("LLM Usage:", response);
     }
   });
 }

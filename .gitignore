@@ -1,2 +1,4 @@
 .env
 .cache/
+node_modules/
+dist/

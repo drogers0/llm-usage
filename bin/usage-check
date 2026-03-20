@@ -25,7 +25,7 @@ done
 
 case "$service" in
   all) fetch_services="claude,codex,copilot" ;;
-  *)   fetch_services="$service" ;;
+  *) fetch_services="$service" ;;
 esac
 
 if ! extension_fetch "$fetch_services" 30; then
@@ -36,90 +36,15 @@ fi
 
 [ "$debug_mode" = true ] && debug_dump
 
-# --- Display helpers ---
-
-claude_text() {
-  local raw
-  raw=$(cat "$CACHE_DIR/claude_usage.json")
-  echo "Claude usage"
-  for key_label in "five_hour:5-hour" "seven_day:7-day" "seven_day_sonnet:7-day sonnet"; do
-    local key="${key_label%%:*}" label="${key_label#*:}"
-    local val
-    val=$(echo "$raw" | jq -r ".$key.utilization // empty")
-    [ -n "$val" ] && printf -- "- %s: %.1f%%\n" "$label" "$val"
-  done
-}
-
-claude_json() {
-  local raw
-  raw=$(cat "$CACHE_DIR/claude_usage.json")
-  local five seven sonnet
-  five=$(claude_window_json "$raw" "five_hour")
-  seven=$(claude_window_json "$raw" "seven_day")
-  sonnet=$(claude_window_json "$raw" "seven_day_sonnet")
-  jq -n --argjson five "$five" --argjson seven "$seven" --argjson sonnet "$sonnet" \
-    '{five_hour: $five, seven_day: $seven, seven_day_sonnet: $sonnet}'
-}
-
-codex_text() {
-  local raw
-  raw=$(cat "$CACHE_DIR/codex_usage.json")
-  echo "Codex usage"
-  printf -- "- 5-hour: %.1f%%\n" "$(echo "$raw" | jq '.rate_limit.primary_window.used_percent')"
-  printf -- "- 7-day: %.1f%%\n" "$(echo "$raw" | jq '.rate_limit.secondary_window.used_percent')"
-  printf -- "- Code review 7-day: %.1f%%\n" "$(echo "$raw" | jq '.code_review_rate_limit.primary_window.used_percent')"
-}
-
-codex_json() {
-  local raw
-  raw=$(cat "$CACHE_DIR/codex_usage.json")
-  local five seven review
-  five=$(codex_window_json "$(echo "$raw" | jq '.rate_limit.primary_window')")
-  seven=$(codex_window_json "$(echo "$raw" | jq '.rate_limit.secondary_window')")
-  review=$(codex_window_json "$(echo "$raw" | jq '.code_review_rate_limit.primary_window')")
-  jq -n --argjson five "$five" --argjson seven "$seven" --argjson review "$review" \
-    '{five_hour: $five, seven_day: $seven, code_review_seven_day: $review}'
-}
-
-copilot_text() {
-  local raw month
-  raw=$(cat "$CACHE_DIR/copilot_usage.json")
-  month=$(copilot_window_json "$raw")
-  echo "Copilot usage"
-  printf -- "- month: %.1f%%\n" "$(echo "$month" | jq '.used_percent')"
-}
-
-copilot_json() {
-  local raw
-  raw=$(cat "$CACHE_DIR/copilot_usage.json")
-  local month
-  month=$(copilot_window_json "$raw")
-  jq -n --argjson month "$month" '{month: $month}'
-}
-
-# --- Output ---
-
-if [ "$format" = "json" ]; then
-  checked_at=$(date -u +"%Y-%m-%dT%H:%M:%S+00:00")
-  case "$service" in
-    claude)
-      jq -n --arg t "$checked_at" --argjson c "$(claude_json)" \
-        '{checked_at: $t, claude: $c}' ;;
-    codex)
-      jq -n --arg t "$checked_at" --argjson c "$(codex_json)" \
-        '{checked_at: $t, codex: $c}' ;;
-    copilot)
-      jq -n --arg t "$checked_at" --argjson c "$(copilot_json)" \
-        '{checked_at: $t, copilot: $c}' ;;
-    all)
-      jq -n --arg t "$checked_at" --argjson cl "$(claude_json)" --argjson cx "$(codex_json)" --argjson cp "$(copilot_json)" \
-        '{checked_at: $t, claude: $cl, codex: $cx, copilot: $cp}' ;;
-  esac
-else
-  case "$service" in
-    claude) claude_text ;;
-    codex)  codex_text ;;
-    copilot) copilot_text ;;
-    all)    claude_text; echo; codex_text; echo; copilot_text ;;
-  esac
+RENDERER_JS="$ROOT_DIR/dist/cli/render.js"
+if [ ! -f "$RENDERER_JS" ]; then
+  echo "Missing renderer: $RENDERER_JS" >&2
+  echo "Action: run 'npm install' and 'npm run build' in $ROOT_DIR" >&2
+  exit 1
 fi
+
+render_args=()
+[ "$service" != "all" ] && render_args+=("$service")
+[ "$format" = "json" ] && render_args+=("--json")
+
+CACHE_DIR="$CACHE_DIR" node "$RENDERER_JS" "${render_args[@]}"

@@ -29,79 +29,6 @@ load_env() {
   done < "$ENV_FILE"
 }
 
-# Convert unix timestamp to ISO 8601 UTC
-iso_from_unix() {
-  [ "$1" = "null" ] || [ -z "$1" ] && return
-  date -u -r "$1" +"%Y-%m-%dT%H:%M:%S+00:00" 2>/dev/null
-}
-
-# Seconds until an ISO 8601 timestamp
-seconds_until_iso() {
-  [ -z "$1" ] || [ "$1" = "null" ] && return
-  local reset_epoch now_epoch delta
-  reset_epoch=$(date -juf "%Y-%m-%dT%H:%M:%S" "${1%%.*}" +%s 2>/dev/null) \
-    || reset_epoch=$(date -juf "%Y-%m-%dT%H:%M:%S%z" "${1%+*}${1##*+}" +%s 2>/dev/null) \
-    || return
-  now_epoch=$(date +%s)
-  delta=$(( reset_epoch - now_epoch ))
-  [ "$delta" -lt 0 ] && delta=0
-  echo "$delta"
-}
-
-# Build a normalized JSON window from Claude API fields
-claude_window_json() {
-  local payload="$1" key="$2"
-
-  local window
-  window=$(echo "$payload" | jq -r ".$key // empty")
-  [ -z "$window" ] && { echo "null"; return; }
-
-  local resets_at reset_secs
-  resets_at=$(echo "$window" | jq -r '.resets_at // empty')
-  reset_secs=$(seconds_until_iso "$resets_at")
-
-  echo "$window" | jq \
-    --argjson reset_secs "${reset_secs:-null}" \
-    '{used_percent: .utilization, remaining_percent: (100 - .utilization), resets_at: .resets_at, reset_after_seconds: $reset_secs}'
-}
-
-# Build a normalized JSON window from Codex API fields
-codex_window_json() {
-  local window="$1"
-  [ -z "$window" ] || [ "$window" = "null" ] && { echo "null"; return; }
-
-  local reset_at reset_at_iso
-  reset_at=$(echo "$window" | jq -r '.reset_at // empty')
-  reset_at_iso=$(iso_from_unix "$reset_at")
-
-  echo "$window" | jq \
-    --arg resets_at "${reset_at_iso:-null}" \
-    'if $resets_at == "null" then {used_percent: .used_percent, remaining_percent: (100 - .used_percent), resets_at: null, reset_after_seconds: .reset_after_seconds}
-     else {used_percent: .used_percent, remaining_percent: (100 - .used_percent), resets_at: $resets_at, reset_after_seconds: .reset_after_seconds} end'
-}
-
-# Build a normalized JSON window from Copilot scraped fields
-copilot_window_json() {
-  local payload="$1"
-  [ -z "$payload" ] || [ "$payload" = "null" ] && { echo "null"; return; }
-
-  # Copilot limits reset at 00:00:00 UTC on the first day of the next month.
-  local next_reset_iso next_reset_epoch now_epoch reset_secs
-  next_reset_iso=$(date -u -v+1m -v1d -v0H -v0M -v0S +"%Y-%m-01T00:00:00+00:00")
-  next_reset_epoch=$(date -u -v+1m -v1d -v0H -v0M -v0S +%s)
-  now_epoch=$(date -u +%s)
-  reset_secs=$(( next_reset_epoch - now_epoch ))
-  [ "$reset_secs" -lt 0 ] && reset_secs=0
-
-  echo "$payload" | jq --arg resets_at "$next_reset_iso" --argjson reset_secs "$reset_secs" '
-    {
-      used_percent: (.used_percent // null),
-      remaining_percent: (.remaining_percent // null),
-      resets_at: $resets_at,
-      reset_after_seconds: $reset_secs
-    }'
-}
-
 # Trigger the Chrome extension to fetch usage data and write to cache
 extension_fetch() {
   local services="$1" max_wait="${2:-30}"
@@ -229,31 +156,40 @@ extension_fetch() {
 
 # Print diagnostics helpful for triaging fetch failures.
 debug_dump() {
-  echo "[usage-check debug]" >&2
-  echo "root_dir=$ROOT_DIR" >&2
-  echo "cache_dir=$CACHE_DIR" >&2
-  echo "extension_id=${EXTENSION_ID:-<unset>}" >&2
-
-  for f in "$CACHE_DIR/claude_usage.json" "$CACHE_DIR/codex_usage.json" "$CACHE_DIR/copilot_usage.json" "$CACHE_DIR/fetch_status.json"; do
-    if [ -f "$f" ]; then
-      local m
-      m=$(stat -f %m "$f" 2>/dev/null || echo "?")
-      echo "cache_file=$(basename "$f") mtime=$m" >&2
-    else
-      echo "cache_file=$(basename "$f") missing" >&2
-    fi
-  done
+  local host_log="$HOME/Library/Logs/llm_usage_native_host.log"
+  local fetch_status="null"
+  local host_tail="[]"
 
   if [ -f "$CACHE_DIR/fetch_status.json" ]; then
-    echo "fetch_status_json:" >&2
-    cat "$CACHE_DIR/fetch_status.json" >&2
+    fetch_status=$(cat "$CACHE_DIR/fetch_status.json" 2>/dev/null || echo "null")
   fi
 
-  local host_log="$HOME/Library/Logs/llm_usage_native_host.log"
   if [ -f "$host_log" ]; then
-    echo "native_host_log_tail:" >&2
-    tail -n 20 "$host_log" >&2 || true
-  else
-    echo "native_host_log_tail: <missing>" >&2
+    host_tail=$(tail -n 20 "$host_log" 2>/dev/null | jq -R -s 'split("\n")[:-1]' 2>/dev/null || echo "[]")
   fi
+
+  jq -n \
+    --arg root_dir "$ROOT_DIR" \
+    --arg cache_dir "$CACHE_DIR" \
+    --arg extension_id "${EXTENSION_ID:-<unset>}" \
+    --argjson claude_mtime "$( [ -f "$CACHE_DIR/claude_usage.json" ] && stat -f %m "$CACHE_DIR/claude_usage.json" || echo null )" \
+    --argjson codex_mtime "$( [ -f "$CACHE_DIR/codex_usage.json" ] && stat -f %m "$CACHE_DIR/codex_usage.json" || echo null )" \
+    --argjson copilot_mtime "$( [ -f "$CACHE_DIR/copilot_usage.json" ] && stat -f %m "$CACHE_DIR/copilot_usage.json" || echo null )" \
+    --argjson status_mtime "$( [ -f "$CACHE_DIR/fetch_status.json" ] && stat -f %m "$CACHE_DIR/fetch_status.json" || echo null )" \
+    --argjson fetch_status "$fetch_status" \
+    --argjson host_log_tail "$host_tail" \
+    '{
+      timestamp: (now | todateiso8601),
+      root_dir: $root_dir,
+      cache_dir: $cache_dir,
+      extension_id: $extension_id,
+      cache_mtimes: {
+        claude_usage: $claude_mtime,
+        codex_usage: $codex_mtime,
+        copilot_usage: $copilot_mtime,
+        fetch_status: $status_mtime
+      },
+      fetch_status: $fetch_status,
+      host_log_tail: $host_log_tail
+    }' >&2
 }

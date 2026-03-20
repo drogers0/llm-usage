@@ -80,6 +80,28 @@ codex_window_json() {
      else {used_percent: .used_percent, remaining_percent: (100 - .used_percent), resets_at: $resets_at, reset_after_seconds: .reset_after_seconds} end'
 }
 
+# Build a normalized JSON window from Copilot scraped fields
+copilot_window_json() {
+  local payload="$1"
+  [ -z "$payload" ] || [ "$payload" = "null" ] && { echo "null"; return; }
+
+  # Copilot limits reset at 00:00:00 UTC on the first day of the next month.
+  local next_reset_iso next_reset_epoch now_epoch reset_secs
+  next_reset_iso=$(date -u -v+1m -v1d -v0H -v0M -v0S +"%Y-%m-01T00:00:00+00:00")
+  next_reset_epoch=$(date -u -v+1m -v1d -v0H -v0M -v0S +%s)
+  now_epoch=$(date -u +%s)
+  reset_secs=$(( next_reset_epoch - now_epoch ))
+  [ "$reset_secs" -lt 0 ] && reset_secs=0
+
+  echo "$payload" | jq --arg resets_at "$next_reset_iso" --argjson reset_secs "$reset_secs" '
+    {
+      used_percent: (.used_percent // null),
+      remaining_percent: (.remaining_percent // null),
+      resets_at: $resets_at,
+      reset_after_seconds: $reset_secs
+    }'
+}
+
 # Trigger the Chrome extension to fetch usage data and write to cache
 extension_fetch() {
   local services="$1" max_wait="${2:-30}"
@@ -90,9 +112,10 @@ extension_fetch() {
   fi
 
   # Record cache mtimes before triggering
-  local claude_mtime="0" codex_mtime="0" status_mtime="0"
+  local claude_mtime="0" codex_mtime="0" copilot_mtime="0" status_mtime="0"
   [ -f "$CACHE_DIR/claude_usage.json" ] && claude_mtime=$(stat -f %m "$CACHE_DIR/claude_usage.json")
   [ -f "$CACHE_DIR/codex_usage.json" ] && codex_mtime=$(stat -f %m "$CACHE_DIR/codex_usage.json")
+  [ -f "$CACHE_DIR/copilot_usage.json" ] && copilot_mtime=$(stat -f %m "$CACHE_DIR/copilot_usage.json")
   [ -f "$CACHE_DIR/fetch_status.json" ] && status_mtime=$(stat -f %m "$CACHE_DIR/fetch_status.json")
 
   # Open the extension's fetch page in a hidden window
@@ -110,13 +133,14 @@ extension_fetch() {
 
   # Wait for cache files to be updated
   local elapsed=0
-  local need_claude=false need_codex=false
+  local need_claude=false need_codex=false need_copilot=false
   [[ "$services" == *claude* ]] && need_claude=true
   [[ "$services" == *codex* ]] && need_codex=true
+  [[ "$services" == *copilot* ]] && need_copilot=true
 
   while [ "$elapsed" -lt "$max_wait" ]; do
     sleep 1
-    local claude_ok=true codex_ok=true
+    local claude_ok=true codex_ok=true copilot_ok=true
 
     if [ -f "$CACHE_DIR/fetch_status.json" ]; then
       local sm
@@ -157,7 +181,15 @@ extension_fetch() {
       fi
     fi
 
-    $claude_ok && $codex_ok && return 0
+    if $need_copilot; then
+      copilot_ok=false
+      if [ -f "$CACHE_DIR/copilot_usage.json" ]; then
+        local m; m=$(stat -f %m "$CACHE_DIR/copilot_usage.json")
+        [ "$m" != "$copilot_mtime" ] && copilot_ok=true
+      fi
+    fi
+
+    $claude_ok && $codex_ok && $copilot_ok && return 0
     elapsed=$((elapsed + 1))
   done
 
@@ -175,6 +207,13 @@ extension_fetch() {
       ' "$CACHE_DIR/fetch_status.json" 2>/dev/null || echo "unknown extension error")
       echo "Extension fetch failed: $latest_err" >&2
       return 1
+    fi
+
+    if [ "$latest_ok" = "true" ]; then
+      if [[ "$services" == *copilot* ]] && [ ! -f "$CACHE_DIR/copilot_usage.json" ]; then
+        echo "Timed out waiting for Copilot cache update; extension may be stale." >&2
+        echo "Action: reload the unpacked extension at chrome://extensions and retry." >&2
+      fi
     fi
   fi
 
@@ -195,7 +234,7 @@ debug_dump() {
   echo "cache_dir=$CACHE_DIR" >&2
   echo "extension_id=${EXTENSION_ID:-<unset>}" >&2
 
-  for f in "$CACHE_DIR/claude_usage.json" "$CACHE_DIR/codex_usage.json" "$CACHE_DIR/fetch_status.json"; do
+  for f in "$CACHE_DIR/claude_usage.json" "$CACHE_DIR/codex_usage.json" "$CACHE_DIR/copilot_usage.json" "$CACHE_DIR/fetch_status.json"; do
     if [ -f "$f" ]; then
       local m
       m=$(stat -f %m "$f" 2>/dev/null || echo "?")

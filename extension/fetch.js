@@ -3,6 +3,6 @@
 // then closes the entire window when done.
 
 const params = new URLSearchParams(window.location.search);
-const services = params.get("s") || "claude,codex";
+const services = params.get("s") || "claude,codex,copilot";
 
 chrome.runtime.sendMessage({ action: "fetch_usage", services: services.split(",") });

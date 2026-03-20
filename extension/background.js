@@ -9,7 +9,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action !== "fetch_usage") return;
   // Use the sender's window — it's already hidden by AppleScript
   const windowId = sender.tab?.windowId;
-  handleFetchRequest(msg.services || ["claude", "codex"], windowId)
+  handleFetchRequest(msg.services || ["claude", "codex", "copilot"], windowId)
     .then((result) => sendResponse(result))
     .catch((e) => sendResponse({ error: e.message }));
   return true;
@@ -30,6 +30,12 @@ async function handleFetchRequest(services, windowId) {
     results.codex = await fetchCodex(windowId);
     if (results.codex?.error) {
       errors.codex = results.codex.error;
+    }
+  }
+  if (services.includes("copilot")) {
+    results.copilot = await fetchCopilot(windowId);
+    if (results.copilot?.error) {
+      errors.copilot = results.copilot.error;
     }
   }
 
@@ -143,6 +149,93 @@ async function fetchCodex(windowId) {
     }
 
     sendToHost({ type: "codex", cache: { codex_usage: result.data } });
+    return { ok: true };
+  } finally {
+    chrome.tabs.remove(tab.id).catch(() => {});
+  }
+}
+
+async function fetchCopilot(windowId) {
+  const tab = await createHiddenTab("https://github.com/settings/copilot/features", windowId);
+
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: async () => {
+        try {
+          const text = document.body?.innerText || "";
+          const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+
+          const contextLines = lines
+            .filter((l) => /copilot|premium|request|usage|remaining|reset|renew/i.test(l))
+            .slice(0, 20);
+
+          const parseIntSafe = (s) => {
+            if (!s) return null;
+            const n = Number(String(s).replace(/,/g, ""));
+            return Number.isFinite(n) ? n : null;
+          };
+
+          let used = null;
+          let total = null;
+          let usedPercent = null;
+          let remainingPercent = null;
+
+          const usedTotalMatch = text.match(/([0-9][0-9,]*)\s*\/\s*([0-9][0-9,]*)/);
+          if (usedTotalMatch) {
+            used = parseIntSafe(usedTotalMatch[1]);
+            total = parseIntSafe(usedTotalMatch[2]);
+            if (total && total > 0) {
+              usedPercent = Number(((used / total) * 100).toFixed(1));
+              remainingPercent = Number((100 - usedPercent).toFixed(1));
+            }
+          }
+
+          if (usedPercent == null) {
+            const percentMatch = text.match(/([0-9]+(?:\.[0-9]+)?)\s*%\s*(?:used|of\s+limit)?/i);
+            if (percentMatch) {
+              usedPercent = Number(percentMatch[1]);
+              if (Number.isFinite(usedPercent)) {
+                remainingPercent = Number((100 - usedPercent).toFixed(1));
+              }
+            }
+          }
+
+          const resetMatch = text.match(/(?:resets?|renews?)\s+(?:on\s+)?([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})/i);
+          const resetText = resetMatch ? resetMatch[1] : null;
+
+          if (usedPercent == null && used == null && total == null) {
+            return {
+              error: "could not parse Copilot usage from GitHub page",
+              parse_context: contextLines,
+            };
+          }
+
+          return {
+            data: {
+              source: "github/settings/copilot/features",
+              fetched_at: new Date().toISOString(),
+              used,
+              total,
+              used_percent: usedPercent,
+              remaining_percent: remainingPercent,
+              reset_text: resetText,
+              parse_context: contextLines,
+            },
+          };
+        } catch (e) {
+          return { error: e.message };
+        }
+      },
+      args: [],
+    });
+
+    const result = results?.[0]?.result;
+    if (!result || result.error) {
+      return { error: result?.error || "script returned no result" };
+    }
+
+    sendToHost({ type: "copilot", cache: { copilot_usage: result.data } });
     return { ok: true };
   } finally {
     chrome.tabs.remove(tab.id).catch(() => {});

@@ -7,7 +7,7 @@ source "$SCRIPT_DIR/_common.sh"
 load_env
 
 usage() {
-  echo "Usage: $(basename "$0") [claude|codex] [--json] [--debug]"
+  echo "Usage: $(basename "$0") [claude|codex|copilot] [--json] [--debug]"
   exit 1
 }
 
@@ -16,7 +16,7 @@ format="text"
 debug_mode=false
 for arg in "$@"; do
   case "$arg" in
-    claude|codex) service="$arg" ;;
+    claude|codex|copilot) service="$arg" ;;
     --json) format="json" ;;
     --debug) debug_mode=true ;;
     *) usage ;;
@@ -24,7 +24,7 @@ for arg in "$@"; do
 done
 
 case "$service" in
-  all) fetch_services="claude,codex" ;;
+  all) fetch_services="claude,codex,copilot" ;;
   *)   fetch_services="$service" ;;
 esac
 
@@ -81,6 +81,22 @@ codex_json() {
     '{five_hour: $five, seven_day: $seven, code_review_seven_day: $review}'
 }
 
+copilot_text() {
+  local raw month
+  raw=$(cat "$CACHE_DIR/copilot_usage.json")
+  month=$(copilot_window_json "$raw")
+  echo "Copilot usage"
+  printf -- "- month: %.1f%%\n" "$(echo "$month" | jq '.used_percent')"
+}
+
+copilot_json() {
+  local raw
+  raw=$(cat "$CACHE_DIR/copilot_usage.json")
+  local month
+  month=$(copilot_window_json "$raw")
+  jq -n --argjson month "$month" '{month: $month}'
+}
+
 # --- Output ---
 
 if [ "$format" = "json" ]; then
@@ -92,14 +108,18 @@ if [ "$format" = "json" ]; then
     codex)
       jq -n --arg t "$checked_at" --argjson c "$(codex_json)" \
         '{checked_at: $t, codex: $c}' ;;
+    copilot)
+      jq -n --arg t "$checked_at" --argjson c "$(copilot_json)" \
+        '{checked_at: $t, copilot: $c}' ;;
     all)
-      jq -n --arg t "$checked_at" --argjson cl "$(claude_json)" --argjson cx "$(codex_json)" \
-        '{checked_at: $t, claude: $cl, codex: $cx}' ;;
+      jq -n --arg t "$checked_at" --argjson cl "$(claude_json)" --argjson cx "$(codex_json)" --argjson cp "$(copilot_json)" \
+        '{checked_at: $t, claude: $cl, codex: $cx, copilot: $cp}' ;;
   esac
 else
   case "$service" in
     claude) claude_text ;;
     codex)  codex_text ;;
-    all)    claude_text; echo; codex_text ;;
+    copilot) copilot_text ;;
+    all)    claude_text; echo; codex_text; echo; copilot_text ;;
   esac
 fi

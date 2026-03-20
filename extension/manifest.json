@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "LLM Usage Fetcher",
   "version": "1.0",
-  "description": "Fetches usage data from Claude and Codex for llm_usage scripts",
+  "description": "Fetches usage data from Claude, Codex, and Copilot for llm_usage scripts",
   "permissions": [
     "cookies",
     "webNavigation",
@@ -12,7 +12,8 @@
   ],
   "host_permissions": [
     "https://claude.ai/*",
-    "https://chatgpt.com/*"
+    "https://chatgpt.com/*",
+    "https://github.com/*"
   ],
   "background": {
     "service_worker": "background.js"

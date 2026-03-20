@@ -1,6 +1,6 @@
 # LLM Usage Check
 
-Check your Claude and Codex API usage limits from the terminal. A Chrome extension fetches data from your authenticated browser sessions in the background.
+Check your Claude, Codex, and Copilot usage limits from the terminal. A Chrome extension fetches data from your authenticated browser sessions in the background.
 
 ```
 $ usage-check
@@ -13,12 +13,15 @@ Codex usage
 - 5-hour: 0.0%
 - 7-day: 11.0%
 - Code review 7-day: 0.0%
+
+Copilot usage
+- month: 4.0%
 ```
 
 ## Requirements
 
 - macOS (uses AppleScript to trigger Chrome)
-- Google Chrome with an active login to `claude.ai` and `chatgpt.com`
+- Google Chrome with an active login to `claude.ai`, `chatgpt.com`, and `github.com`
 - [`jq`](https://jqlang.github.io/jq/download/) — `brew install jq`
 
 ## Setup
@@ -39,6 +42,7 @@ Codex usage
 usage-check                # both services, human-readable
 usage-check claude         # claude only
 usage-check codex          # codex only
+usage-check copilot        # copilot only
 usage-check --json         # both services, JSON
 usage-check claude --json  # claude only, JSON
 usage-check --debug        # include fetch diagnostics on stderr
@@ -47,7 +51,7 @@ usage-check --debug        # include fetch diagnostics on stderr
 ## How It Works
 
 1. The script triggers the Chrome extension via AppleScript (opens a 1×1 pixel window — Chrome stays in the background).
-2. The extension opens tabs to `claude.ai` and `chatgpt.com` inside that hidden window.
+2. The extension opens tabs to `claude.ai`, `chatgpt.com`, and `github.com` inside that hidden window.
 3. It runs `fetch()` inside the page context using your existing browser sessions.
 4. Results are sent to a native messaging host which writes them to `.cache/`.
 5. The script reads the cached JSON and outputs it.
@@ -90,6 +94,14 @@ usage-check --json
     "five_hour": { "..." },
     "seven_day": { "..." },
     "code_review_seven_day": { "..." }
+  },
+  "copilot": {
+    "month": {
+      "used_percent": 4,
+      "remaining_percent": 96,
+      "resets_at": "2026-04-01T00:00:00+00:00",
+      "reset_after_seconds": 1065600
+    }
   }
 }
 ```

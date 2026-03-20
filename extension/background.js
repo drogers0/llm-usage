@@ -1,5 +1,9 @@
 const HOST_NAME = "com.llm_usage.cache_host";
 
+function sendStatus(status) {
+  sendToHost({ type: "status", cache: { fetch_status: status } });
+}
+
 // Handle fetch requests from the trigger page
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action !== "fetch_usage") return;
@@ -12,13 +16,39 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 async function handleFetchRequest(services, windowId) {
+  const startedAt = new Date().toISOString();
   const results = {};
+  const errors = {};
 
   if (services.includes("claude")) {
     results.claude = await fetchClaude(windowId);
+    if (results.claude?.error) {
+      errors.claude = results.claude.error;
+    }
   }
   if (services.includes("codex")) {
     results.codex = await fetchCodex(windowId);
+    if (results.codex?.error) {
+      errors.codex = results.codex.error;
+    }
+  }
+
+  const failedServices = Object.keys(errors);
+  if (failedServices.length > 0) {
+    sendStatus({
+      ok: false,
+      at: new Date().toISOString(),
+      started_at: startedAt,
+      services,
+      errors,
+    });
+  } else {
+    sendStatus({
+      ok: true,
+      at: new Date().toISOString(),
+      started_at: startedAt,
+      services,
+    });
   }
 
   // Close the hidden window when done

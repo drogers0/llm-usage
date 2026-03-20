@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
 HOST_SCRIPT="$ROOT_DIR/native-host/usage_cache_host.py"
+HOST_LAUNCHER="$ROOT_DIR/native-host/usage_cache_host.sh"
 HOST_NAME="com.llm_usage.cache_host"
 
 # Chrome native messaging hosts directory (macOS)
@@ -25,6 +26,7 @@ EXT_ID="$1"
 echo "Installing native messaging host..."
 
 chmod +x "$HOST_SCRIPT"
+chmod +x "$HOST_LAUNCHER"
 
 mkdir -p "$CHROME_NMH_DIR"
 
@@ -32,7 +34,7 @@ cat > "$CHROME_NMH_DIR/$HOST_NAME.json" <<EOF
 {
   "name": "$HOST_NAME",
   "description": "Writes cached usage data for llm_usage scripts",
-  "path": "$HOST_SCRIPT",
+  "path": "$HOST_LAUNCHER",
   "type": "stdio",
   "allowed_origins": [
     "chrome-extension://$EXT_ID/"

@@ -90,9 +90,10 @@ extension_fetch() {
   fi
 
   # Record cache mtimes before triggering
-  local claude_mtime="0" codex_mtime="0"
+  local claude_mtime="0" codex_mtime="0" status_mtime="0"
   [ -f "$CACHE_DIR/claude_usage.json" ] && claude_mtime=$(stat -f %m "$CACHE_DIR/claude_usage.json")
   [ -f "$CACHE_DIR/codex_usage.json" ] && codex_mtime=$(stat -f %m "$CACHE_DIR/codex_usage.json")
+  [ -f "$CACHE_DIR/fetch_status.json" ] && status_mtime=$(stat -f %m "$CACHE_DIR/fetch_status.json")
 
   # Open the extension's fetch page in a hidden window
   local front_app
@@ -117,6 +118,29 @@ extension_fetch() {
     sleep 1
     local claude_ok=true codex_ok=true
 
+    if [ -f "$CACHE_DIR/fetch_status.json" ]; then
+      local sm
+      sm=$(stat -f %m "$CACHE_DIR/fetch_status.json")
+      if [ "$sm" != "$status_mtime" ]; then
+        status_mtime="$sm"
+        local status_ok
+        status_ok=$(jq -r '.ok // empty' "$CACHE_DIR/fetch_status.json" 2>/dev/null || true)
+        if [ "$status_ok" = "false" ]; then
+          local status_err
+          status_err=$(jq -r '
+            if (.errors | type) == "object" then
+              (.errors | to_entries | map("\(.key): \(.value)") | join("; "))
+            else
+              "unknown extension error"
+            end
+          ' "$CACHE_DIR/fetch_status.json" 2>/dev/null || echo "unknown extension error")
+          echo "Extension fetch failed: $status_err" >&2
+          echo "Action: open chrome://extensions -> LLM Usage Fetcher -> service worker, then run usage-check again to inspect errors." >&2
+          return 1
+        fi
+      fi
+    fi
+
     if $need_claude; then
       claude_ok=false
       if [ -f "$CACHE_DIR/claude_usage.json" ]; then
@@ -136,6 +160,61 @@ extension_fetch() {
     $claude_ok && $codex_ok && return 0
     elapsed=$((elapsed + 1))
   done
-  echo "Timed out waiting for extension fetch." >&2
+
+  if [ -f "$CACHE_DIR/fetch_status.json" ]; then
+    local latest_ok
+    latest_ok=$(jq -r '.ok // empty' "$CACHE_DIR/fetch_status.json" 2>/dev/null || true)
+    if [ "$latest_ok" = "false" ]; then
+      local latest_err
+      latest_err=$(jq -r '
+        if (.errors | type) == "object" then
+          (.errors | to_entries | map("\(.key): \(.value)") | join("; "))
+        else
+          "unknown extension error"
+        end
+      ' "$CACHE_DIR/fetch_status.json" 2>/dev/null || echo "unknown extension error")
+      echo "Extension fetch failed: $latest_err" >&2
+      return 1
+    fi
+  fi
+
+  if [ -f "$HOME/Library/Logs/llm_usage_native_host.log" ]; then
+    echo "Timed out waiting for extension fetch. Native host launch log tail:" >&2
+    tail -n 3 "$HOME/Library/Logs/llm_usage_native_host.log" >&2 || true
+  else
+    echo "Timed out waiting for extension fetch. Native host did not report a launch." >&2
+  fi
+  echo "Action: verify extension is loaded, then inspect chrome://extensions -> LLM Usage Fetcher -> service worker errors." >&2
   return 1
+}
+
+# Print diagnostics helpful for triaging fetch failures.
+debug_dump() {
+  echo "[usage-check debug]" >&2
+  echo "root_dir=$ROOT_DIR" >&2
+  echo "cache_dir=$CACHE_DIR" >&2
+  echo "extension_id=${EXTENSION_ID:-<unset>}" >&2
+
+  for f in "$CACHE_DIR/claude_usage.json" "$CACHE_DIR/codex_usage.json" "$CACHE_DIR/fetch_status.json"; do
+    if [ -f "$f" ]; then
+      local m
+      m=$(stat -f %m "$f" 2>/dev/null || echo "?")
+      echo "cache_file=$(basename "$f") mtime=$m" >&2
+    else
+      echo "cache_file=$(basename "$f") missing" >&2
+    fi
+  done
+
+  if [ -f "$CACHE_DIR/fetch_status.json" ]; then
+    echo "fetch_status_json:" >&2
+    cat "$CACHE_DIR/fetch_status.json" >&2
+  fi
+
+  local host_log="$HOME/Library/Logs/llm_usage_native_host.log"
+  if [ -f "$host_log" ]; then
+    echo "native_host_log_tail:" >&2
+    tail -n 20 "$host_log" >&2 || true
+  else
+    echo "native_host_log_tail: <missing>" >&2
+  fi
 }

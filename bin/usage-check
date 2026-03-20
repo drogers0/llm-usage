@@ -7,16 +7,18 @@ source "$SCRIPT_DIR/_common.sh"
 load_env
 
 usage() {
-  echo "Usage: $(basename "$0") [claude|codex] [--json]"
+  echo "Usage: $(basename "$0") [claude|codex] [--json] [--debug]"
   exit 1
 }
 
 service="all"
 format="text"
+debug_mode=false
 for arg in "$@"; do
   case "$arg" in
     claude|codex) service="$arg" ;;
     --json) format="json" ;;
+    --debug) debug_mode=true ;;
     *) usage ;;
   esac
 done
@@ -26,7 +28,13 @@ case "$service" in
   *)   fetch_services="$service" ;;
 esac
 
-extension_fetch "$fetch_services" 30 || { echo "Fetch failed" >&2; exit 1; }
+if ! extension_fetch "$fetch_services" 30; then
+  [ "$debug_mode" = true ] && debug_dump
+  echo "Fetch failed" >&2
+  exit 1
+fi
+
+[ "$debug_mode" = true ] && debug_dump
 
 # --- Display helpers ---
 

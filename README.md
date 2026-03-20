@@ -41,6 +41,7 @@ usage-check claude         # claude only
 usage-check codex          # codex only
 usage-check --json         # both services, JSON
 usage-check claude --json  # claude only, JSON
+usage-check --debug        # include fetch diagnostics on stderr
 ```
 
 ## How It Works

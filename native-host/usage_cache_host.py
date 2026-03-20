@@ -3,12 +3,16 @@
 
 import json
 import os
+import signal
 import struct
 import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 CACHE_DIR = os.path.join(ROOT, ".cache")
+
+# Exit cleanly if Chrome closes the native messaging pipe.
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 
 
 def read_message():
@@ -22,9 +26,13 @@ def read_message():
 
 def send_message(obj):
     encoded = json.dumps(obj).encode("utf-8")
-    sys.stdout.buffer.write(struct.pack("<I", len(encoded)))
-    sys.stdout.buffer.write(encoded)
-    sys.stdout.buffer.flush()
+    try:
+        sys.stdout.buffer.write(struct.pack("<I", len(encoded)))
+        sys.stdout.buffer.write(encoded)
+        sys.stdout.buffer.flush()
+    except BrokenPipeError:
+        # Chrome may close the pipe immediately after receiving a response.
+        return
 
 
 def write_cache(cache_data):
@@ -56,7 +64,10 @@ def main():
         write_cache(cache_data)
         send_message({"ok": True, "updated": list(cache_data.keys())})
     except Exception as e:
-        send_message({"ok": False, "error": str(e)})
+        try:
+            send_message({"ok": False, "error": str(e)})
+        except BrokenPipeError:
+            return
 
 
 if __name__ == "__main__":

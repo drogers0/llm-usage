@@ -1,28 +1,52 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
+SELF="$0"
+[ -L "$SELF" ] && SELF=$(readlink -f "$SELF")
+ROOT_DIR=$(cd -- "$(dirname -- "$SELF")" && pwd)
 HOST_SCRIPT="$ROOT_DIR/native-host/usage_cache_host.py"
 HOST_LAUNCHER="$ROOT_DIR/native-host/usage_cache_host.sh"
 HOST_NAME="com.llm_usage.cache_host"
+EXT_DIR="$ROOT_DIR/extension"
 
 # Chrome native messaging hosts directory (macOS)
 CHROME_NMH_DIR="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
 
-if [ $# -lt 1 ]; then
-  echo "Usage: $0 <chrome-extension-id>"
+# If called with an extension ID, skip the interactive flow
+if [ $# -ge 1 ]; then
+  EXT_ID="$1"
+else
   echo ""
-  echo "To find your extension ID:"
-  echo "  1. Open chrome://extensions"
-  echo "  2. Enable Developer mode"
-  echo "  3. Click 'Load unpacked' and select: $ROOT_DIR/extension"
-  echo "  4. Copy the extension ID shown under the extension name"
-  echo "  5. Run: $0 <that-id>"
-  exit 1
+  echo "  LLM Usage Check — Setup"
+  echo "  ========================"
+  echo ""
+  echo "  The Chrome extension needs to be loaded manually."
+  echo ""
+  echo "  Extension directory:"
+  echo "    $EXT_DIR"
+  echo ""
+
+  read -rp "  Open Chrome extensions page? [Y/n] " answer
+  if [[ ! "$answer" =~ ^[Nn]$ ]]; then
+    open -a "Google Chrome" "chrome://extensions" 2>/dev/null || true
+  fi
+
+  echo ""
+  echo "  Steps:"
+  echo "    1. Enable Developer mode (toggle in the top right)"
+  echo "    2. Click 'Load unpacked' and select the path above"
+  echo "    3. Copy the extension ID shown under the extension name"
+  echo ""
+
+  read -rp "  Paste the extension ID: " EXT_ID
+
+  if [ -z "$EXT_ID" ]; then
+    echo "  No extension ID provided. Exiting."
+    exit 1
+  fi
 fi
 
-EXT_ID="$1"
-
+echo ""
 echo "Installing native messaging host..."
 
 chmod +x "$HOST_SCRIPT"
@@ -53,23 +77,6 @@ else
 fi
 
 echo "Saved EXTENSION_ID to .env"
-
-# Optionally add bin/ to PATH
-BIN_DIR="$ROOT_DIR/bin"
-SHELL_RC=""
-case "$(basename "$SHELL")" in
-  zsh)  SHELL_RC="$HOME/.zshrc" ;;
-  bash) SHELL_RC="$HOME/.bashrc" ;;
-esac
-
-if [ -n "$SHELL_RC" ] && ! echo "$PATH" | tr ':' '\n' | grep -qx "$BIN_DIR"; then
-  echo ""
-  read -rp "Add $BIN_DIR to PATH in $(basename "$SHELL_RC")? [y/N] " answer
-  if [[ "$answer" =~ ^[Yy]$ ]]; then
-    echo "export PATH=\"$BIN_DIR:\$PATH\"" >> "$SHELL_RC"
-    echo "Added to $SHELL_RC — restart your shell or run: source $SHELL_RC"
-  fi
-fi
 
 echo ""
 echo "Done. Run 'usage-check' to test."

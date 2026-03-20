@@ -34,7 +34,7 @@ extension_fetch() {
   local services="$1" max_wait="${2:-30}"
 
   if [ -z "${EXTENSION_ID:-}" ]; then
-    echo "Missing EXTENSION_ID in .env — run install.sh first" >&2
+    echo "Missing EXTENSION_ID in .env — run usage-check-setup first" >&2
     exit 1
   fi
 
@@ -75,16 +75,10 @@ extension_fetch() {
       if [ "$sm" != "$status_mtime" ]; then
         status_mtime="$sm"
         local status_ok
-        status_ok=$(jq -r '.ok // empty' "$CACHE_DIR/fetch_status.json" 2>/dev/null || true)
+        status_ok=$(node -e "try{const d=JSON.parse(require('fs').readFileSync('$CACHE_DIR/fetch_status.json','utf8'));if(d.ok!=null)console.log(d.ok)}catch{}" 2>/dev/null || true)
         if [ "$status_ok" = "false" ]; then
           local status_err
-          status_err=$(jq -r '
-            if (.errors | type) == "object" then
-              (.errors | to_entries | map("\(.key): \(.value)") | join("; "))
-            else
-              "unknown extension error"
-            end
-          ' "$CACHE_DIR/fetch_status.json" 2>/dev/null || echo "unknown extension error")
+          status_err=$(node -e "try{const d=JSON.parse(require('fs').readFileSync('$CACHE_DIR/fetch_status.json','utf8'));const e=d.errors;if(e&&typeof e==='object')console.log(Object.entries(e).map(([k,v])=>k+': '+v).join('; '));else console.log('unknown extension error')}catch{console.log('unknown extension error')}" 2>/dev/null || echo "unknown extension error")
           echo "Extension fetch failed: $status_err" >&2
           echo "Action: open chrome://extensions -> LLM Usage Fetcher -> service worker, then run usage-check again to inspect errors." >&2
           return 1
@@ -122,16 +116,10 @@ extension_fetch() {
 
   if [ -f "$CACHE_DIR/fetch_status.json" ]; then
     local latest_ok
-    latest_ok=$(jq -r '.ok // empty' "$CACHE_DIR/fetch_status.json" 2>/dev/null || true)
+    latest_ok=$(node -e "try{const d=JSON.parse(require('fs').readFileSync('$CACHE_DIR/fetch_status.json','utf8'));if(d.ok!=null)console.log(d.ok)}catch{}" 2>/dev/null || true)
     if [ "$latest_ok" = "false" ]; then
       local latest_err
-      latest_err=$(jq -r '
-        if (.errors | type) == "object" then
-          (.errors | to_entries | map("\(.key): \(.value)") | join("; "))
-        else
-          "unknown extension error"
-        end
-      ' "$CACHE_DIR/fetch_status.json" 2>/dev/null || echo "unknown extension error")
+      latest_err=$(node -e "try{const d=JSON.parse(require('fs').readFileSync('$CACHE_DIR/fetch_status.json','utf8'));const e=d.errors;if(e&&typeof e==='object')console.log(Object.entries(e).map(([k,v])=>k+': '+v).join('; '));else console.log('unknown extension error')}catch{console.log('unknown extension error')}" 2>/dev/null || echo "unknown extension error")
       echo "Extension fetch failed: $latest_err" >&2
       return 1
     fi
@@ -157,39 +145,26 @@ extension_fetch() {
 # Print diagnostics helpful for triaging fetch failures.
 debug_dump() {
   local host_log="$HOME/Library/Logs/llm_usage_native_host.log"
-  local fetch_status="null"
-  local host_tail="[]"
 
-  if [ -f "$CACHE_DIR/fetch_status.json" ]; then
-    fetch_status=$(cat "$CACHE_DIR/fetch_status.json" 2>/dev/null || echo "null")
-  fi
-
-  if [ -f "$host_log" ]; then
-    host_tail=$(tail -n 20 "$host_log" 2>/dev/null | jq -R -s 'split("\n")[:-1]' 2>/dev/null || echo "[]")
-  fi
-
-  jq -n \
-    --arg root_dir "$ROOT_DIR" \
-    --arg cache_dir "$CACHE_DIR" \
-    --arg extension_id "${EXTENSION_ID:-<unset>}" \
-    --argjson claude_mtime "$( [ -f "$CACHE_DIR/claude_usage.json" ] && stat -f %m "$CACHE_DIR/claude_usage.json" || echo null )" \
-    --argjson codex_mtime "$( [ -f "$CACHE_DIR/codex_usage.json" ] && stat -f %m "$CACHE_DIR/codex_usage.json" || echo null )" \
-    --argjson copilot_mtime "$( [ -f "$CACHE_DIR/copilot_usage.json" ] && stat -f %m "$CACHE_DIR/copilot_usage.json" || echo null )" \
-    --argjson status_mtime "$( [ -f "$CACHE_DIR/fetch_status.json" ] && stat -f %m "$CACHE_DIR/fetch_status.json" || echo null )" \
-    --argjson fetch_status "$fetch_status" \
-    --argjson host_log_tail "$host_tail" \
-    '{
-      timestamp: (now | todateiso8601),
-      root_dir: $root_dir,
-      cache_dir: $cache_dir,
-      extension_id: $extension_id,
+  node -e "
+    const fs = require('fs');
+    const read = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return null; } };
+    const stat = (p) => { try { return fs.statSync(p).mtimeMs / 1000 | 0; } catch { return null; } };
+    const fetchStatus = read('$CACHE_DIR/fetch_status.json');
+    const hostLog = read('$host_log');
+    console.log(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      root_dir: '$ROOT_DIR',
+      cache_dir: '$CACHE_DIR',
+      extension_id: '${EXTENSION_ID:-<unset>}',
       cache_mtimes: {
-        claude_usage: $claude_mtime,
-        codex_usage: $codex_mtime,
-        copilot_usage: $copilot_mtime,
-        fetch_status: $status_mtime
+        claude_usage: stat('$CACHE_DIR/claude_usage.json'),
+        codex_usage: stat('$CACHE_DIR/codex_usage.json'),
+        copilot_usage: stat('$CACHE_DIR/copilot_usage.json'),
+        fetch_status: stat('$CACHE_DIR/fetch_status.json'),
       },
-      fetch_status: $fetch_status,
-      host_log_tail: $host_log_tail
-    }' >&2
+      fetch_status: fetchStatus ? JSON.parse(fetchStatus) : null,
+      host_log_tail: hostLog ? hostLog.split('\n').filter(Boolean).slice(-20) : [],
+    }, null, 2));
+  " >&2
 }

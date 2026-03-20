@@ -1,8 +1,18 @@
 {
   "name": "llm-usage",
-  "version": "1.0.0",
-  "private": true,
+  "version": "0.0.1",
   "type": "module",
+  "bin": {
+    "usage-check": "bin/usage-check",
+    "usage-check-setup": "install.sh"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "extension",
+    "native-host",
+    "install.sh"
+  ],
   "scripts": {
     "build": "node esbuild.config.mjs",
     "test": "vitest run",

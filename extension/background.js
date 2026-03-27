@@ -160,6 +160,10 @@ var extensionProviders = {
 
 // src/extension/background.ts
 var HOST_NAME = "com.llm_usage.cache_host";
+chrome.runtime.onStartup.addListener(() => {
+});
+chrome.runtime.onInstalled.addListener(() => {
+});
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const message = msg;
   if (message.action !== "fetch_usage") return;

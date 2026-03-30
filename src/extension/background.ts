@@ -14,6 +14,10 @@ type FetchStatus = {
   errors?: Record<string, string>;
 };
 
+// Keep a startup/install event registered so Chrome wakes this MV3 worker early.
+chrome.runtime.onStartup.addListener(() => {});
+chrome.runtime.onInstalled.addListener(() => {});
+
 chrome.runtime.onMessage.addListener((msg: unknown, sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
   const message = msg as { action?: string; services?: unknown };
   if (message.action !== "fetch_usage") return;

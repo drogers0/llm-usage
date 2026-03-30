@@ -1,28 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import { validateEnvelope } from "../shared/fetch-status.js";
+import type { FetchEnvelope } from "../shared/fetch-status.js";
 
-type FetchStatus = {
-  ok: boolean;
-  at: string;
-  started_at: string;
-  services: string[];
-  errors?: Record<string, string>;
-};
-
-type ExtensionFetchEnvelope = {
-  ok: boolean;
-  error?: string;
-  services?: string[];
-  results?: {
-    claude?: unknown;
-    codex?: unknown;
-    copilot?: unknown;
-  };
-  status?: FetchStatus;
-};
-
-function decodeEnvelope(encoded: string): ExtensionFetchEnvelope {
-  return JSON.parse(decodeURIComponent(encoded)) as ExtensionFetchEnvelope;
+function decodeEnvelope(encoded: string): FetchEnvelope {
+  const raw = JSON.parse(decodeURIComponent(encoded));
+  return validateEnvelope(raw);
 }
 
 function writeJson(cacheDir: string, name: string, data: unknown): void {
@@ -30,9 +13,26 @@ function writeJson(cacheDir: string, name: string, data: unknown): void {
   fs.writeFileSync(target, JSON.stringify(data));
 }
 
-function writeCacheFromEnvelope(cacheDir: string, payload: ExtensionFetchEnvelope): void {
+function writeCacheFromEnvelope(cacheDir: string, payload: FetchEnvelope): void {
   if (!payload.ok) {
     throw new Error(payload.error || "unknown extension error");
+  }
+
+  // Reject if the status reports failure despite top-level ok
+  if (payload.status && !payload.status.ok) {
+    const errors = payload.status.errors
+      ? Object.entries(payload.status.errors).map(([k, v]) => `${k}: ${v}`).join("; ")
+      : "unknown error";
+    throw new Error(`status reports failure: ${errors}`);
+  }
+
+  // Reject if any requested service is missing from results (unless zero services requested)
+  const requestedServices = payload.services || [];
+  if (requestedServices.length > 0 && payload.results) {
+    const missing = requestedServices.filter((s) => !(s in payload.results!));
+    if (missing.length > 0) {
+      throw new Error(`missing results for requested providers: ${missing.join(", ")}`);
+    }
   }
 
   fs.mkdirSync(cacheDir, { recursive: true });

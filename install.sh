@@ -2,16 +2,20 @@
 set -euo pipefail
 
 SELF="$0"
-[ -L "$SELF" ] && SELF=$(readlink -f "$SELF")
+# Portable symlink resolution (macOS BSD readlink lacks -f)
+while [ -L "$SELF" ]; do
+  _dir=$(cd -- "$(dirname -- "$SELF")" && pwd)
+  SELF=$(readlink "$SELF")
+  [[ "$SELF" != /* ]] && SELF="$_dir/$SELF"
+done
 ROOT_DIR=$(cd -- "$(dirname -- "$SELF")" && pwd)
 HOST_SCRIPT="$ROOT_DIR/native-host/usage_cache_host.py"
-HOST_LAUNCHER="$ROOT_DIR/native-host/usage_cache_host.sh"
 HOST_NAME="com.llm_usage.cache_host"
 EXT_DIR="$ROOT_DIR/extension"
 EXT_MANIFEST="$EXT_DIR/manifest.json"
 
 # Chrome native messaging hosts directory (macOS)
-CHROME_NMH_DIR="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
+CHROME_NMH_DIR="${LLM_USAGE_NMH_DIR:-$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts}"
 
 derive_extension_id() {
   node -e "
@@ -37,8 +41,17 @@ derive_extension_id() {
 
 DERIVED_EXT_ID="$(derive_extension_id)"
 
-# If called with an extension ID, skip the interactive flow
-if [ $# -ge 1 ]; then
+# Parse arguments: --non-interactive <ext-id> | <ext-id> | (no args = interactive)
+NON_INTERACTIVE=false
+if [ $# -ge 1 ] && [ "$1" = "--non-interactive" ]; then
+  NON_INTERACTIVE=true
+  shift
+  if [ $# -lt 1 ]; then
+    echo "usage: install.sh --non-interactive <extension-id>" >&2
+    exit 2
+  fi
+  EXT_ID="$1"
+elif [ $# -ge 1 ]; then
   EXT_ID="$1"
 else
   echo ""
@@ -81,11 +94,12 @@ if ! [[ "$EXT_ID" =~ ^[a-p]{32}$ ]]; then
   exit 1
 fi
 
-echo ""
-echo "Installing native messaging host..."
+if [ "$NON_INTERACTIVE" = false ]; then
+  echo ""
+  echo "Installing native messaging host..."
+fi
 
 chmod +x "$HOST_SCRIPT"
-chmod +x "$HOST_LAUNCHER"
 
 mkdir -p "$CHROME_NMH_DIR"
 
@@ -101,7 +115,9 @@ cat > "$CHROME_NMH_DIR/$HOST_NAME.json" <<EOF
 }
 EOF
 
-echo "Installed: $CHROME_NMH_DIR/$HOST_NAME.json"
+if [ "$NON_INTERACTIVE" = false ]; then
+  echo "Installed: $CHROME_NMH_DIR/$HOST_NAME.json"
+fi
 
 # Save extension ID to .env so the bash scripts can trigger it
 ENV_FILE="$ROOT_DIR/.env"
@@ -111,7 +127,8 @@ else
   echo "EXTENSION_ID=$EXT_ID" >> "$ENV_FILE"
 fi
 
-echo "Saved EXTENSION_ID to .env"
-
-echo ""
-echo "Done. Run 'usage-check' to test."
+if [ "$NON_INTERACTIVE" = false ]; then
+  echo "Saved EXTENSION_ID to .env"
+  echo ""
+  echo "Done. Run 'usage-check' to test."
+fi

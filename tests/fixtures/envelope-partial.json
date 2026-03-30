@@ -1,0 +1,17 @@
+{
+  "ok": true,
+  "services": ["claude", "codex", "copilot"],
+  "results": {
+    "claude": { "five_hour": { "utilization": 12.5, "resets_at": "2026-03-20T20:00:00+00:00" } }
+  },
+  "status": {
+    "ok": false,
+    "at": "2026-03-20T18:00:00.000Z",
+    "started_at": "2026-03-20T17:59:55.000Z",
+    "services": ["claude", "codex", "copilot"],
+    "errors": {
+      "codex": "auth_error: could not get access token",
+      "copilot": "parse_error: could not parse Copilot usage from DOM"
+    }
+  }
+}

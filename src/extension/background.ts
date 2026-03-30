@@ -1,43 +1,54 @@
 /// <reference types="chrome" />
 
 import { UsageError } from "../shared/errors.js";
+import { buildFetchStatus } from "../shared/fetch-status.js";
+import type { FetchUsageMessage } from "../shared/fetch-status.js";
 import type { ProviderId } from "../shared/types.js";
 import { extensionProviders } from "./providers/registry.js";
 
 const HOST_NAME = "com.llm_usage.cache_host";
-
-type FetchStatus = {
-  ok: boolean;
-  at: string;
-  started_at: string;
-  services: string[];
-  errors?: Record<string, string>;
-};
 
 // Keep a startup/install event registered so Chrome wakes this MV3 worker early.
 chrome.runtime.onStartup.addListener(() => {});
 chrome.runtime.onInstalled.addListener(() => {});
 
 chrome.runtime.onMessage.addListener((msg: unknown, sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
-  const message = msg as { action?: string; services?: unknown };
+  const message = msg as FetchUsageMessage;
   if (message.action !== "fetch_usage") return;
   const windowId = sender.tab?.windowId;
   const keepWindow = Boolean(sender.tab?.url && sender.tab.url.includes("keep=1"));
-  const services: string[] = Array.isArray(message.services) ? (message.services as string[]) : ["claude", "codex", "copilot"];
+  const services: string[] = Array.isArray(message.services) ? message.services : ["claude", "codex", "copilot"];
+  const requestId = message.request_id;
+  const deadlineMs = message.deadline_ms;
 
-  handleFetchRequest(services, windowId, keepWindow)
+  handleFetchRequest(services, windowId, keepWindow, requestId, deadlineMs)
     .then((result) => sendResponse(result))
     .catch((e) => sendResponse({ error: (e as Error).message }));
 
   return true;
 });
 
-async function handleFetchRequest(services: string[], windowId: number | undefined, keepWindow = false) {
+async function handleFetchRequest(
+  services: string[],
+  windowId: number | undefined,
+  keepWindow = false,
+  requestId?: string,
+  deadlineMs?: number,
+) {
   const startedAt = new Date().toISOString();
   const errors: Record<string, string> = {};
   const results: Record<string, unknown> = {};
 
   for (const service of services) {
+    // Check remaining time budget before each provider
+    if (deadlineMs) {
+      const remaining = deadlineMs - Date.now();
+      if (remaining <= 0) {
+        errors[service] = "deadline exceeded";
+        continue;
+      }
+    }
+
     const providerId = service as ProviderId;
     const provider = extensionProviders[providerId];
     if (!provider) {
@@ -46,7 +57,7 @@ async function handleFetchRequest(services: string[], windowId: number | undefin
     }
 
     try {
-      results[service] = (await provider.fetch({ windowId, createHiddenTab, sendToHost })).data;
+      results[service] = (await provider.fetch({ windowId, createHiddenTab, sendToHost, deadlineMs })).data;
     } catch (err) {
       if (err instanceof UsageError) {
         errors[service] = `${err.code}: ${err.message}`;
@@ -56,13 +67,7 @@ async function handleFetchRequest(services: string[], windowId: number | undefin
     }
   }
 
-  const status: FetchStatus = {
-    ok: Object.keys(errors).length === 0,
-    at: new Date().toISOString(),
-    started_at: startedAt,
-    services,
-    ...(Object.keys(errors).length > 0 ? { errors } : {}),
-  };
+  const status = buildFetchStatus(services, errors, startedAt, new Date().toISOString(), requestId);
 
   void sendToHost({ type: "status", cache: { fetch_status: status } }).catch(() => undefined);
 
@@ -73,18 +78,14 @@ async function handleFetchRequest(services: string[], windowId: number | undefin
   return { results, status };
 }
 
-async function createHiddenTab(url: string, windowId: number | undefined): Promise<chrome.tabs.Tab> {
+async function createHiddenTab(url: string, windowId: number | undefined, timeoutMs = 30000): Promise<chrome.tabs.Tab> {
   const tab = await chrome.tabs.create({ url, windowId, active: false });
-  try {
-    await waitForTab(tab.id as number);
-    return tab;
-  } catch (e) {
-    chrome.tabs.remove(tab.id as number).catch(() => undefined);
-    throw e;
-  }
+  // Do not remove the tab on failure — withHiddenTab owns cleanup.
+  await waitForTab(tab.id as number, timeoutMs);
+  return tab;
 }
 
-function waitForTab(tabId: number): Promise<void> {
+function waitForTab(tabId: number, timeoutMs = 30000): Promise<void> {
   return new Promise((resolve, reject) => {
     const done = () => {
       clearTimeout(timeout);
@@ -95,7 +96,7 @@ function waitForTab(tabId: number): Promise<void> {
     const timeout = setTimeout(() => {
       chrome.tabs.onUpdated.removeListener(onUpdated);
       reject(new Error("tab load timed out"));
-    }, 30000);
+    }, timeoutMs);
 
     function onUpdated(updatedTabId: number, info: chrome.tabs.TabChangeInfo) {
       if (updatedTabId === tabId && info.status === "complete") {

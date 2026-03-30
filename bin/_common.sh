@@ -4,8 +4,16 @@
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 ROOT_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd)
 ENV_FILE="$ROOT_DIR/.env"
-CACHE_DIR="$ROOT_DIR/.cache"
+CACHE_DIR="${LLM_USAGE_CACHE_DIR:-$ROOT_DIR/.cache}"
 INGEST_RESULT_JS="$ROOT_DIR/dist/cli/ingest_extension_result.js"
+READ_STATUS_JS="$ROOT_DIR/dist/cli/read-fetch-status.js"
+
+# Read fetch_status.json and output tab-separated: ok\terrors_string\trequest_id
+read_fetch_status() {
+  local status_file="$CACHE_DIR/fetch_status.json"
+  [ -f "$status_file" ] || { printf 'null\tunknown extension error\tnull\n'; return; }
+  node "$READ_STATUS_JS" --tsv "$status_file" 2>/dev/null || printf 'null\tunknown extension error\tnull\n'
+}
 
 # Load EXTENSION_ID from .env
 load_env() {
@@ -33,6 +41,11 @@ load_env() {
 # Trigger the Chrome extension to fetch usage data and write to cache
 extension_fetch() {
   local services="$1" max_wait="${2:-30}"
+  local request_id
+  request_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
+  local deadline_ms
+  deadline_ms=$(( $(date +%s) * 1000 + max_wait * 1000 ))
+  local applescript_wait=$(( max_wait + 3 ))
 
   if [ -z "${EXTENSION_ID:-}" ]; then
     echo "Missing EXTENSION_ID in .env — run usage-check-setup first" >&2
@@ -55,11 +68,11 @@ extension_fetch() {
     tell application "Google Chrome"
       set w to make new window
       set bounds of w to {0, 0, 1, 1}
-      set URL of active tab of w to "chrome-extension://${EXTENSION_ID}/fetch.html?s=${services}&return=1&keep=1"
+      set URL of active tab of w to "chrome-extension://${EXTENSION_ID}/fetch.html?s=${services}&return=1&keep=1&request_id=${request_id}&deadline_ms=${deadline_ms}"
     end tell
     tell application "${front_app}" to activate
 
-    repeat with i from 1 to ${max_wait}
+    repeat with i from 1 to ${applescript_wait}
       delay 1
       tell application "Google Chrome"
         try
@@ -110,11 +123,15 @@ OSA
       sm=$(stat -f %m "$CACHE_DIR/fetch_status.json")
       if [ "$sm" != "$status_mtime" ]; then
         status_mtime="$sm"
-        local status_ok
-        status_ok=$(node -e "try{const d=JSON.parse(require('fs').readFileSync('$CACHE_DIR/fetch_status.json','utf8'));if(d.ok!=null)console.log(d.ok)}catch{}" 2>/dev/null || true)
+        local status_line
+        status_line=$(read_fetch_status)
+        local status_ok status_err status_rid
+        IFS=$'\t' read -r status_ok status_err status_rid <<< "$status_line"
+        # Skip stale status from a different request
+        if [ "$status_rid" != "null" ] && [ "$status_rid" != "$request_id" ]; then
+          continue
+        fi
         if [ "$status_ok" = "false" ]; then
-          local status_err
-          status_err=$(node -e "try{const d=JSON.parse(require('fs').readFileSync('$CACHE_DIR/fetch_status.json','utf8'));const e=d.errors;if(e&&typeof e==='object')console.log(Object.entries(e).map(([k,v])=>k+': '+v).join('; '));else console.log('unknown extension error')}catch{console.log('unknown extension error')}" 2>/dev/null || echo "unknown extension error")
           echo "Extension fetch failed: $status_err" >&2
           echo "Action: open chrome://extensions -> LLM Usage Fetcher -> service worker, then run usage-check again to inspect errors." >&2
           return 1
@@ -151,11 +168,11 @@ OSA
   done
 
   if [ -f "$CACHE_DIR/fetch_status.json" ]; then
-    local latest_ok
-    latest_ok=$(node -e "try{const d=JSON.parse(require('fs').readFileSync('$CACHE_DIR/fetch_status.json','utf8'));if(d.ok!=null)console.log(d.ok)}catch{}" 2>/dev/null || true)
+    local latest_line
+    latest_line=$(read_fetch_status)
+    local latest_ok latest_err latest_rid
+    IFS=$'\t' read -r latest_ok latest_err latest_rid <<< "$latest_line"
     if [ "$latest_ok" = "false" ]; then
-      local latest_err
-      latest_err=$(node -e "try{const d=JSON.parse(require('fs').readFileSync('$CACHE_DIR/fetch_status.json','utf8'));const e=d.errors;if(e&&typeof e==='object')console.log(Object.entries(e).map(([k,v])=>k+': '+v).join('; '));else console.log('unknown extension error')}catch{console.log('unknown extension error')}" 2>/dev/null || echo "unknown extension error")
       echo "Extension fetch failed: $latest_err" >&2
       return 1
     fi

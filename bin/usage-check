@@ -2,7 +2,12 @@
 set -euo pipefail
 
 SELF="$0"
-[ -L "$SELF" ] && SELF=$(readlink -f "$SELF")
+# Portable symlink resolution (macOS BSD readlink lacks -f)
+while [ -L "$SELF" ]; do
+  _dir=$(cd -- "$(dirname -- "$SELF")" && pwd)
+  SELF=$(readlink "$SELF")
+  [[ "$SELF" != /* ]] && SELF="$_dir/$SELF"
+done
 SCRIPT_DIR=$(cd -- "$(dirname -- "$SELF")" && pwd)
 # shellcheck source=_common.sh
 source "$SCRIPT_DIR/_common.sh"
@@ -49,4 +54,4 @@ render_args=()
 [ "$service" != "all" ] && render_args+=("$service")
 [ "$format" = "json" ] && render_args+=("--json")
 
-CACHE_DIR="$CACHE_DIR" node "$RENDERER_JS" "${render_args[@]}"
+CACHE_DIR="$CACHE_DIR" node "$RENDERER_JS" ${render_args[@]+"${render_args[@]}"}

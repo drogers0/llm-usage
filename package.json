@@ -15,6 +15,7 @@
   ],
   "scripts": {
     "build": "node esbuild.config.mjs",
+    "pretest": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest"
   },

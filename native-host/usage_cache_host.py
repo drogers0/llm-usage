@@ -10,7 +10,7 @@ import tempfile
 from datetime import datetime, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-CACHE_DIR = os.path.join(ROOT, ".cache")
+CACHE_DIR = os.environ.get("LLM_USAGE_CACHE_DIR", os.path.join(ROOT, ".cache"))
 LOG_FILE = os.path.join(os.path.expanduser("~"), "Library", "Logs", "llm_usage_native_host.log")
 
 # Exit cleanly if Chrome closes the native messaging pipe.

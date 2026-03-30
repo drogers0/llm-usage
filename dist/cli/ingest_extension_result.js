@@ -1,8 +1,29 @@
 // src/cli/ingest_extension_result.ts
 import fs from "node:fs";
 import path from "node:path";
+
+// src/shared/fetch-status.ts
+function validateEnvelope(raw) {
+  if (typeof raw !== "object" || raw === null) {
+    throw new Error("envelope is not an object");
+  }
+  const obj = raw;
+  if (typeof obj.ok !== "boolean") {
+    throw new Error("envelope missing boolean 'ok' field");
+  }
+  if (obj.services !== void 0 && !Array.isArray(obj.services)) {
+    throw new Error("envelope 'services' must be an array");
+  }
+  if (obj.results !== void 0 && (typeof obj.results !== "object" || obj.results === null)) {
+    throw new Error("envelope 'results' must be an object");
+  }
+  return raw;
+}
+
+// src/cli/ingest_extension_result.ts
 function decodeEnvelope(encoded) {
-  return JSON.parse(decodeURIComponent(encoded));
+  const raw = JSON.parse(decodeURIComponent(encoded));
+  return validateEnvelope(raw);
 }
 function writeJson(cacheDir, name, data) {
   const target = path.join(cacheDir, `${name}.json`);
@@ -11,6 +32,17 @@ function writeJson(cacheDir, name, data) {
 function writeCacheFromEnvelope(cacheDir, payload) {
   if (!payload.ok) {
     throw new Error(payload.error || "unknown extension error");
+  }
+  if (payload.status && !payload.status.ok) {
+    const errors = payload.status.errors ? Object.entries(payload.status.errors).map(([k, v]) => `${k}: ${v}`).join("; ") : "unknown error";
+    throw new Error(`status reports failure: ${errors}`);
+  }
+  const requestedServices = payload.services || [];
+  if (requestedServices.length > 0 && payload.results) {
+    const missing = requestedServices.filter((s) => !(s in payload.results));
+    if (missing.length > 0) {
+      throw new Error(`missing results for requested providers: ${missing.join(", ")}`);
+    }
   }
   fs.mkdirSync(cacheDir, { recursive: true });
   if (payload.results && typeof payload.results === "object") {

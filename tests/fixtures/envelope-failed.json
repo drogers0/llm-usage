@@ -1,0 +1,5 @@
+{
+  "ok": false,
+  "error": "fetch_usage failed: auth_error: lastActiveOrg cookie not found",
+  "services": ["claude"]
+}

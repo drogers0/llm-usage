@@ -14,6 +14,17 @@ await build({
 await build({
   bundle: true,
   format: "esm",
+  target: "node20",
+  platform: "node",
+  sourcemap: false,
+  logLevel: "info",
+  entryPoints: ["src/cli/ingest_extension_result.ts"],
+  outfile: "dist/cli/ingest_extension_result.js",
+});
+
+await build({
+  bundle: true,
+  format: "esm",
   target: "chrome120",
   platform: "browser",
   sourcemap: false,

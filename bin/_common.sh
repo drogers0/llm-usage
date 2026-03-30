@@ -5,6 +5,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 ROOT_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd)
 ENV_FILE="$ROOT_DIR/.env"
 CACHE_DIR="$ROOT_DIR/.cache"
+INGEST_RESULT_JS="$ROOT_DIR/dist/cli/ingest_extension_result.js"
 
 # Load EXTENSION_ID from .env
 load_env() {
@@ -78,44 +79,17 @@ OSA
 
   if [[ "$result_url" == *"#result="* ]]; then
     local encoded_payload="${result_url#*#result=}"
-    if RESULT_URL="$encoded_payload" CACHE_DIR="$CACHE_DIR" node - <<'NODE'
-const fs = require('fs');
-const path = require('path');
+    if [ ! -f "$INGEST_RESULT_JS" ]; then
+      echo "Missing helper: $INGEST_RESULT_JS" >&2
+      echo "Action: run 'npm install' and 'npm run build' in $ROOT_DIR" >&2
+      return 1
+    fi
 
-const encoded = process.env.RESULT_URL || '';
-const cacheDir = process.env.CACHE_DIR;
-const payload = JSON.parse(decodeURIComponent(encoded));
-
-if (!payload.ok) {
-  console.error(payload.error || 'unknown extension error');
-  process.exit(1);
-}
-
-fs.mkdirSync(cacheDir, { recursive: true });
-
-const writeJson = (name, data) => {
-  const target = path.join(cacheDir, `${name}.json`);
-  fs.writeFileSync(target, JSON.stringify(data));
-};
-
-if (payload.results && typeof payload.results === 'object') {
-  if (payload.results.claude !== undefined) writeJson('claude_usage', payload.results.claude);
-  if (payload.results.codex !== undefined) writeJson('codex_usage', payload.results.codex);
-  if (payload.results.copilot !== undefined) writeJson('copilot_usage', payload.results.copilot);
-}
-
-if (payload.status) {
-  writeJson('fetch_status', payload.status);
-}
-NODE
+    if RESULT_URL="$encoded_payload" CACHE_DIR="$CACHE_DIR" node "$INGEST_RESULT_JS" --write
     then
       return 0
     else
-      echo "Extension fetch failed: $(RESULT_URL="$encoded_payload" node - <<'NODE'
-const payload = JSON.parse(decodeURIComponent(process.env.RESULT_URL || ''));
-process.stdout.write(payload.error || 'unknown extension error');
-NODE
-)" >&2
+      echo "Extension fetch failed: $(RESULT_URL="$encoded_payload" node "$INGEST_RESULT_JS" --error 2>/dev/null || echo "unknown extension error")" >&2
       return 1
     fi
   fi

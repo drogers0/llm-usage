@@ -31,8 +31,8 @@ export class CodexExtensionProvider extends BaseExtensionProvider {
       const result = results?.[0]?.result as { data?: unknown; error?: string } | undefined;
       if (!result || result.error) this.throwTransport(result?.error || "script returned no result");
 
-      ctx.sendToHost({ type: "codex", cache: { codex_usage: result.data } });
-      return { ok: true };
+      void ctx.sendToHost({ type: "codex", cache: { codex_usage: result.data } }).catch(() => undefined);
+      return { data: result.data };
     } finally {
       chrome.tabs.remove(tab.id as number).catch(() => undefined);
     }

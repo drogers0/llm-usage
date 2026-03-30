@@ -3,6 +3,7 @@
   "name": "LLM Usage Fetcher",
   "version": "1.0",
   "description": "Fetches usage data from Claude, Codex, and Copilot for llm_usage scripts",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtIMzWtHO+2/so9qJldxudh0htkjYWVYrQ2ZDSwoxvJmfmBy2OzzkySXzzGNTeFGx8r4d8wGoD74gkRSGwz272ygNKfBfhxjLFaBWaqUPPaoXutJDqL1b8HtiwEMJx25tsO6D3n3bpAtlEStHrcCFIRwJ6aQdaK8eaWNIVyyk8+amwHyIh1O5KqxeG6g1FQHN3C/UseI0SZEMfsSabVTHs2xfvy0YZbEVGCzQey1sVZCGw21157P2FUTddfG17gBN6WY8oCN73pCj9ZNPB50xETE1SSJgJbRRcslibdo8zB9UPGvWC55BIEF+498xceDCZ9lUFyeITgxjWBcnXINp6wIDAQAB",
   "permissions": [
     "cookies",
     "webNavigation",

@@ -33,6 +33,8 @@ usage-check-setup
 
 The setup command walks you through loading the Chrome extension and registering the native messaging host.
 
+The extension now uses a deterministic ID from its manifest key. In normal setup you do not need to paste an ID manually.
+
 ## Usage
 
 ```bash
@@ -96,7 +98,7 @@ Each limit window contains `used_percent`, `remaining_percent`, `resets_at` (ISO
 
 ## Troubleshooting
 
-- **`Missing EXTENSION_ID in .env`** — Run `usage-check-setup <extension-id>`.
+- **`Missing EXTENSION_ID in .env`** — Run `usage-check-setup`.
 - **`Timed out waiting for extension fetch`** — Make sure Chrome is running and you're logged in to the services.
 - **Extension not working after Chrome update** — Reload at `chrome://extensions` and re-run `usage-check-setup`.
 - **`Missing renderer: dist/cli/render.js`** — Run `npm run build`.

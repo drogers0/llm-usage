@@ -6,11 +6,11 @@ import type { ProviderId } from "../../shared/types.js";
 export interface FetchContext {
   windowId: number | undefined;
   createHiddenTab: (url: string, windowId: number | undefined) => Promise<chrome.tabs.Tab>;
-  sendToHost: (payload: Record<string, unknown>) => void;
+  sendToHost: (payload: Record<string, unknown>) => Promise<unknown>;
 }
 
 export interface ProviderFetchResult {
-  ok: true;
+  data: unknown;
 }
 
 export abstract class BaseExtensionProvider {

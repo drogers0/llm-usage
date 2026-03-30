@@ -57,8 +57,8 @@ var ClaudeExtensionProvider = class extends BaseExtensionProvider {
       });
       const result = results?.[0]?.result;
       if (!result || result.error) this.throwTransport(result?.error || "script returned no result");
-      ctx.sendToHost({ type: "claude", cache: { claude_usage: result.data } });
-      return { ok: true };
+      void ctx.sendToHost({ type: "claude", cache: { claude_usage: result.data } }).catch(() => void 0);
+      return { data: result.data };
     } finally {
       chrome.tabs.remove(tab.id).catch(() => void 0);
     }
@@ -92,8 +92,8 @@ var CodexExtensionProvider = class extends BaseExtensionProvider {
       });
       const result = results?.[0]?.result;
       if (!result || result.error) this.throwTransport(result?.error || "script returned no result");
-      ctx.sendToHost({ type: "codex", cache: { codex_usage: result.data } });
-      return { ok: true };
+      void ctx.sendToHost({ type: "codex", cache: { codex_usage: result.data } }).catch(() => void 0);
+      return { data: result.data };
     } finally {
       chrome.tabs.remove(tab.id).catch(() => void 0);
     }
@@ -143,8 +143,8 @@ var CopilotExtensionProvider = class extends BaseExtensionProvider {
       });
       const result = results?.[0]?.result;
       if (!result || result.error) this.throwParse(result?.error || "script returned no result");
-      ctx.sendToHost({ type: "copilot", cache: { copilot_usage: result.data } });
-      return { ok: true };
+      void ctx.sendToHost({ type: "copilot", cache: { copilot_usage: result.data } }).catch(() => void 0);
+      return { data: result.data };
     } finally {
       chrome.tabs.remove(tab.id).catch(() => void 0);
     }
@@ -168,11 +168,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const message = msg;
   if (message.action !== "fetch_usage") return;
   const windowId = sender.tab?.windowId;
+  const keepWindow = Boolean(sender.tab?.url && sender.tab.url.includes("keep=1"));
   const services = Array.isArray(message.services) ? message.services : ["claude", "codex", "copilot"];
-  handleFetchRequest(services, windowId).then((result) => sendResponse(result)).catch((e) => sendResponse({ error: e.message }));
+  handleFetchRequest(services, windowId, keepWindow).then((result) => sendResponse(result)).catch((e) => sendResponse({ error: e.message }));
   return true;
 });
-async function handleFetchRequest(services, windowId) {
+async function handleFetchRequest(services, windowId, keepWindow = false) {
   const startedAt = (/* @__PURE__ */ new Date()).toISOString();
   const errors = {};
   const results = {};
@@ -184,7 +185,7 @@ async function handleFetchRequest(services, windowId) {
       continue;
     }
     try {
-      results[service] = await provider.fetch({ windowId, createHiddenTab, sendToHost });
+      results[service] = (await provider.fetch({ windowId, createHiddenTab, sendToHost })).data;
     } catch (err) {
       if (err instanceof UsageError) {
         errors[service] = `${err.code}: ${err.message}`;
@@ -200,11 +201,11 @@ async function handleFetchRequest(services, windowId) {
     services,
     ...Object.keys(errors).length > 0 ? { errors } : {}
   };
-  sendToHost({ type: "status", cache: { fetch_status: status } });
-  if (windowId) {
+  void sendToHost({ type: "status", cache: { fetch_status: status } }).catch(() => void 0);
+  if (windowId && !keepWindow) {
     chrome.windows.remove(windowId).catch(() => void 0);
   }
-  return results;
+  return { results, status };
 }
 async function createHiddenTab(url, windowId) {
   const tab = await chrome.tabs.create({ url, windowId, active: false });
@@ -218,26 +219,43 @@ async function createHiddenTab(url, windowId) {
 }
 function waitForTab(tabId) {
   return new Promise((resolve, reject) => {
+    const done = () => {
+      clearTimeout(timeout);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      setTimeout(resolve, 1e3);
+    };
     const timeout = setTimeout(() => {
-      chrome.webNavigation.onCompleted.removeListener(listener);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
       reject(new Error("tab load timed out"));
     }, 3e4);
-    function listener(details) {
-      if (details.tabId === tabId && details.frameId === 0) {
-        clearTimeout(timeout);
-        chrome.webNavigation.onCompleted.removeListener(listener);
-        setTimeout(resolve, 1e3);
+    function onUpdated(updatedTabId, info) {
+      if (updatedTabId === tabId && info.status === "complete") {
+        done();
       }
     }
-    chrome.webNavigation.onCompleted.addListener(listener);
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    chrome.tabs.get(tabId).then((tab) => {
+      if (tab.status === "complete") {
+        done();
+      }
+    }).catch(() => {
+      clearTimeout(timeout);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      reject(new Error("tab no longer exists"));
+    });
   });
 }
 function sendToHost(payload) {
-  chrome.runtime.sendNativeMessage(HOST_NAME, payload, (response) => {
-    if (chrome.runtime.lastError) {
-      console.error("LLM Usage:", chrome.runtime.lastError.message);
-    } else {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendNativeMessage(HOST_NAME, payload, (response) => {
+      if (chrome.runtime.lastError) {
+        const message = chrome.runtime.lastError.message;
+        console.error("LLM Usage:", message);
+        reject(new Error(message));
+        return;
+      }
       console.log("LLM Usage:", response);
-    }
+      resolve(response);
+    });
   });
 }

@@ -54,8 +54,8 @@ export class CopilotExtensionProvider extends BaseExtensionProvider {
       const result = results?.[0]?.result as { data?: unknown; error?: string } | undefined;
       if (!result || result.error) this.throwParse(result?.error || "script returned no result");
 
-      ctx.sendToHost({ type: "copilot", cache: { copilot_usage: result.data } });
-      return { ok: true };
+      void ctx.sendToHost({ type: "copilot", cache: { copilot_usage: result.data } }).catch(() => undefined);
+      return { data: result.data };
     } finally {
       chrome.tabs.remove(tab.id as number).catch(() => undefined);
     }

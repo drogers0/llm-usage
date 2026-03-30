@@ -45,18 +45,80 @@ extension_fetch() {
   [ -f "$CACHE_DIR/copilot_usage.json" ] && copilot_mtime=$(stat -f %m "$CACHE_DIR/copilot_usage.json")
   [ -f "$CACHE_DIR/fetch_status.json" ] && status_mtime=$(stat -f %m "$CACHE_DIR/fetch_status.json")
 
-  # Open the extension's fetch page in a hidden window
+  # Open the extension's fetch page in a hidden window and poll for direct results.
   local front_app
   front_app=$(osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true' 2>/dev/null)
 
-  osascript -e "
-    tell application \"Google Chrome\"
+  local result_url=""
+  result_url=$(osascript <<OSA 2>/dev/null || true
+    tell application "Google Chrome"
       set w to make new window
       set bounds of w to {0, 0, 1, 1}
-      set URL of active tab of w to \"chrome-extension://${EXTENSION_ID}/fetch.html?s=${services}\"
+      set URL of active tab of w to "chrome-extension://${EXTENSION_ID}/fetch.html?s=${services}&return=1&keep=1"
     end tell
-    tell application \"${front_app}\" to activate
-  " 2>/dev/null
+    tell application "${front_app}" to activate
+
+    repeat with i from 1 to ${max_wait}
+      delay 1
+      tell application "Google Chrome"
+        try
+          set currentUrl to URL of active tab of w
+          if currentUrl contains "#result=" then
+            return currentUrl
+          end if
+        on error
+          return "__WINDOW_CLOSED__"
+        end try
+      end tell
+    end repeat
+
+    return "__TIMEOUT__"
+OSA
+  )
+
+  if [[ "$result_url" == *"#result="* ]]; then
+    local encoded_payload="${result_url#*#result=}"
+    if RESULT_URL="$encoded_payload" CACHE_DIR="$CACHE_DIR" node - <<'NODE'
+const fs = require('fs');
+const path = require('path');
+
+const encoded = process.env.RESULT_URL || '';
+const cacheDir = process.env.CACHE_DIR;
+const payload = JSON.parse(decodeURIComponent(encoded));
+
+if (!payload.ok) {
+  console.error(payload.error || 'unknown extension error');
+  process.exit(1);
+}
+
+fs.mkdirSync(cacheDir, { recursive: true });
+
+const writeJson = (name, data) => {
+  const target = path.join(cacheDir, `${name}.json`);
+  fs.writeFileSync(target, JSON.stringify(data));
+};
+
+if (payload.results && typeof payload.results === 'object') {
+  if (payload.results.claude !== undefined) writeJson('claude_usage', payload.results.claude);
+  if (payload.results.codex !== undefined) writeJson('codex_usage', payload.results.codex);
+  if (payload.results.copilot !== undefined) writeJson('copilot_usage', payload.results.copilot);
+}
+
+if (payload.status) {
+  writeJson('fetch_status', payload.status);
+}
+NODE
+    then
+      return 0
+    else
+      echo "Extension fetch failed: $(RESULT_URL="$encoded_payload" node - <<'NODE'
+const payload = JSON.parse(decodeURIComponent(process.env.RESULT_URL || ''));
+process.stdout.write(payload.error || 'unknown extension error');
+NODE
+)" >&2
+      return 1
+    fi
+  fi
 
   # Wait for cache files to be updated
   local elapsed=0

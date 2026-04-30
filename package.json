@@ -1,6 +1,6 @@
 {
   "name": "llm-usage",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "type": "module",
   "bin": {
     "usage-check": "bin/usage-check",
